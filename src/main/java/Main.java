@@ -44,20 +44,14 @@ public class Main {
                 String command = null;
                 String key = null;
                 String value = null;
-
+                String[] args = new String[argCount];
                 for (int i = 0; i < argCount; i++) {
                     reader.readLine(); // $length
-                    String arg = reader.readLine();
-
-                    if (i == 0) {
-                        command = arg.toUpperCase();
-                    } else if (i == 1) {
-                        key = arg;
-                    } else if (i == 2) {
-                        value = arg;
-                    }
+                    args[i] = reader.readLine();
                 }
-
+                command = args[0].toUpperCase();
+                if (argCount >= 2) key = args[1];
+                if (argCount >= 3) value = args[2];
                 switch (command) {
                     case "PING" -> sendSimpleString(out, "PONG");
                     case "ECHO" -> {
@@ -66,7 +60,23 @@ public class Main {
                     }
                     case "SET" -> {
                         if (key != null && value != null) {
-                            keyValueStore.set(key, value);
+                            long expiryMillis = Long.MAX_VALUE; // default: no expiry
+
+                            // Check for optional arguments
+                            if (argCount >= 5) {
+                                String optionName = args[3].toUpperCase();
+
+                                try {
+                                    int timeValue = Integer.parseInt(args[4]); // actual time
+                                    if ("EX".equals(optionName)) {
+                                        expiryMillis = timeValue * 1000; // seconds to ms
+                                    } else if ("PX".equals(optionName)) {
+                                        expiryMillis = timeValue; // already in ms
+                                    }
+                                } catch (NumberFormatException ignored) {}
+                            }
+
+                            keyValueStore.set(key, value, expiryMillis);
                             sendSimpleString(out, "OK");
                         } else {
                             sendError(out, "SET requires key and value");
