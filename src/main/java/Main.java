@@ -6,6 +6,7 @@ import java.nio.charset.StandardCharsets;
 public class Main {
 
     private static final KeyValueStore keyValueStore = new KeyValueStore();
+    private static final ListStore listStore = new ListStore();
 
     public static void main(String[] args) throws IOException {
         int port = 6379;
@@ -93,6 +94,14 @@ public class Main {
                             sendError(out, "GET requires a key");
                         }
                     }
+                    case "RPUSH" -> {
+                        if (key != null && value != null) {
+                            int size = listStore.rpush(key, value);
+                            sendInteger(out, size);
+                        } else {
+                            sendError(out, "RPUSH requires key and value");
+                        }
+                    }
                     default -> sendError(out, "unknown command");
                 }
             }
@@ -119,6 +128,11 @@ public class Main {
 
     private static void sendError(OutputStream out, String msg) throws IOException {
         out.write(("-ERR " + msg + "\r\n").getBytes(StandardCharsets.UTF_8));
+        out.flush();
+    }
+
+    private static void sendInteger(OutputStream out, int value) throws IOException {
+        out.write((":" + value + "\r\n").getBytes(StandardCharsets.UTF_8));
         out.flush();
     }
 }
