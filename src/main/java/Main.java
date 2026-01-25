@@ -1,51 +1,85 @@
-import java.io.BufferedReader;
-import java.io.IOException;
-import java.io.InputStreamReader;
-import java.io.OutputStream;
+import java.io.*;
 import java.net.ServerSocket;
 import java.net.Socket;
+import java.nio.charset.StandardCharsets;
 
 public class Main {
-  public static void main(String[] args) {
-    int port = 6379;
-    boolean listening = true;
 
-    try (ServerSocket serverSocket = new ServerSocket(port)) {
-      // Since the tester restarts your program quite often, setting
-      // SO_REUSEADDR ensures that we don't run into 'Address already in use'
-      // errors
-      serverSocket.setReuseAddress(true);
+    public static void main(String[] args) throws IOException {
+        int port = 6379;
 
-      while (listening) {
-        Socket clientSocket = serverSocket.accept();
-        System.out.println("New client connected");
+        ServerSocket serverSocket = new ServerSocket(port);
+        System.out.println("Redis-like server running on port " + port);
 
-        new Thread(() -> handleClient(clientSocket))
-            .start();
-      }
+        while (true) {
+            Socket client = serverSocket.accept();
+            System.out.println("Client connected");
 
-    } catch (IOException e) {
-      System.out.println("IOException: " + e.getMessage());
-      System.exit(-1);
+            new Thread(() -> handleClient(client)).start();
+        }
     }
-  }
 
-  static void handleClient(Socket clientSocket) {
-    try (clientSocket;
-        OutputStream outputStream = clientSocket.getOutputStream();
-        BufferedReader in = new BufferedReader(
-            new InputStreamReader(clientSocket.getInputStream()))) {
+    private static void handleClient(Socket client) {
+        try (
+            InputStream in = client.getInputStream();
+            OutputStream out = client.getOutputStream();
+        ) {
+            BufferedReader reader = new BufferedReader(
+                    new InputStreamReader(in, StandardCharsets.UTF_8)
+            );
 
-      while (true) {
-        byte[] input = new byte[1024];
-        clientSocket.getInputStream().read(input);
-        String inputString = new String(input).trim();
-        System.out.println("Received: " + inputString);
-        clientSocket.getOutputStream().write("+PONG\r\n".getBytes());
-      }
+            while (true) {
+                // Read first RESP line (e.g. *1 or *2)
+                String line = reader.readLine();
+                if (line == null) break;
 
-    } catch (IOException e) {
-      System.out.println("IOException: " + e.getMessage());
+                if (!line.startsWith("*")) {
+                    sendError(out, "Invalid RESP");
+                    continue;
+                }
+
+                int argCount = Integer.parseInt(line.substring(1));
+
+                String command = null;
+                String argument = null;
+
+                for (int i = 0; i < argCount; i++) {
+                    reader.readLine(); // $length
+                    String value = reader.readLine();
+
+                    if (i == 0) {
+                        command = value.toUpperCase();
+                    } else if (i == 1) {
+                        argument = value;
+                    }
+                }
+
+                if ("PING".equals(command)) {
+                    sendSimpleString(out, "PONG");
+                } else if ("ECHO".equals(command) && argument != null) {
+                    sendBulkString(out, argument);
+                } else {
+                    sendError(out, "unknown command");
+                }
+            }
+        } catch (IOException e) {
+            System.out.println("Client disconnected");
+        }
     }
-  }
+
+    private static void sendSimpleString(OutputStream out, String msg) throws IOException {
+        out.write(("+" + msg + "\r\n").getBytes(StandardCharsets.UTF_8));
+        out.flush();
+    }
+
+    private static void sendBulkString(OutputStream out, String msg) throws IOException {
+        out.write(("$" + msg.length() + "\r\n" + msg + "\r\n")
+                .getBytes(StandardCharsets.UTF_8));
+        out.flush();
+    }
+
+    private static void sendError(OutputStream out, String msg) throws IOException {
+        out.write(("-ERR " + msg + "\r\n").getBytes(StandardCharsets.UTF_8));
+        out.flush();
+    }
 }
