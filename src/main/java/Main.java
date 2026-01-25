@@ -2,6 +2,7 @@ import java.io.*;
 import java.net.ServerSocket;
 import java.net.Socket;
 import java.nio.charset.StandardCharsets;
+import java.util.List;
 
 public class Main {
 
@@ -98,12 +99,41 @@ public class Main {
                         if (key != null && value != null) {
                             int size = 0;
                             for (int i=2;i<argCount;i++){
-                                size = listStore.rpush(key, value);
+                                size = listStore.rpush(key, args[i]);
                             }
                             sendInteger(out, size);
                         } else {
                             sendError(out, "RPUSH requires key and value");
                         }
+                    }
+                    case "LPUSH" -> {
+                        if (key != null && value != null) {
+                            int size = 0;
+                            for (int i=argCount-1;i>=2;i--){
+                                size = listStore.rpush(key, args[i]);
+                            }
+                            sendInteger(out, size);
+                        } else {
+                            sendError(out, "RPUSH requires key and value");
+                        }
+                    }
+                    case "LRANGE" -> {
+                        if (argCount == 4) {
+                            try {
+                                int start = Integer.parseInt(args[2]);
+                                int stop = Integer.parseInt(args[3]);
+
+                                List<String> elements = listStore.lrange(key, start, stop);
+                                sendArray(out, elements);
+                            } catch (NumberFormatException e) {
+                                sendError(out, "LRANGE start and stop must be integers");
+                            }
+                        } else {
+                            sendError(out, "LRANGE requires key start stop");
+                        }
+                    }
+                    case "LLEN" -> {
+                        sendInteger(out, listStore.llen(key));
                     }
                     default -> sendError(out, "unknown command");
                 }
@@ -138,4 +168,14 @@ public class Main {
         out.write((":" + value + "\r\n").getBytes(StandardCharsets.UTF_8));
         out.flush();
     }
+    private static void sendArray(OutputStream out, List<String> items) throws IOException {
+    out.write(("*" + items.size() + "\r\n").getBytes(StandardCharsets.UTF_8));
+
+    for (String item : items) {
+        out.write(("$" + item.length() + "\r\n" + item + "\r\n")
+                .getBytes(StandardCharsets.UTF_8));
+    }
+    out.flush();
+}
+
 }
