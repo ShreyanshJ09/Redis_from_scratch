@@ -5,6 +5,8 @@ import java.nio.charset.StandardCharsets;
 
 public class Main {
 
+    private static final KeyValueStore keyValueStore = new KeyValueStore();
+
     public static void main(String[] args) throws IOException {
         int port = 6379;
 
@@ -29,7 +31,6 @@ public class Main {
             );
 
             while (true) {
-                // Read first RESP line (e.g. *1 or *2)
                 String line = reader.readLine();
                 if (line == null) break;
 
@@ -41,25 +42,48 @@ public class Main {
                 int argCount = Integer.parseInt(line.substring(1));
 
                 String command = null;
-                String argument = null;
+                String key = null;
+                String value = null;
 
                 for (int i = 0; i < argCount; i++) {
                     reader.readLine(); // $length
-                    String value = reader.readLine();
+                    String arg = reader.readLine();
 
                     if (i == 0) {
-                        command = value.toUpperCase();
+                        command = arg.toUpperCase();
                     } else if (i == 1) {
-                        argument = value;
+                        key = arg;
+                    } else if (i == 2) {
+                        value = arg;
                     }
                 }
 
-                if ("PING".equals(command)) {
-                    sendSimpleString(out, "PONG");
-                } else if ("ECHO".equals(command) && argument != null) {
-                    sendBulkString(out, argument);
-                } else {
-                    sendError(out, "unknown command");
+                switch (command) {
+                    case "PING" -> sendSimpleString(out, "PONG");
+                    case "ECHO" -> {
+                        if (key != null) sendBulkString(out, key);
+                        else sendError(out, "ECHO requires an argument");
+                    }
+                    case "SET" -> {
+                        if (key != null && value != null) {
+                            keyValueStore.set(key, value);
+                            sendSimpleString(out, "OK");
+                        } else {
+                            sendError(out, "SET requires key and value");
+                        }
+                    }
+                    case "GET" -> {
+                        if (key != null) {
+                            if (keyValueStore.exists(key)) {
+                                sendBulkString(out, keyValueStore.get(key));
+                            } else {
+                                sendNullBulkString(out);
+                            }
+                        } else {
+                            sendError(out, "GET requires a key");
+                        }
+                    }
+                    default -> sendError(out, "unknown command");
                 }
             }
         } catch (IOException e) {
@@ -75,6 +99,11 @@ public class Main {
     private static void sendBulkString(OutputStream out, String msg) throws IOException {
         out.write(("$" + msg.length() + "\r\n" + msg + "\r\n")
                 .getBytes(StandardCharsets.UTF_8));
+        out.flush();
+    }
+
+    private static void sendNullBulkString(OutputStream out) throws IOException {
+        out.write("$-1\r\n".getBytes(StandardCharsets.UTF_8));
         out.flush();
     }
 
