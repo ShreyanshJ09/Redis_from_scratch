@@ -96,7 +96,10 @@ public class Main {
                     }
                     case "RPUSH" -> {
                         if (key != null && value != null) {
-                            int size = listStore.rpush(key, value);
+                            int size = 0;
+                            for (int i=2;i<argCount;i++){
+                                size = listStore.rpush(key, value);
+                            }
                             sendInteger(out, size);
                         } else {
                             sendError(out, "RPUSH requires key and value");
