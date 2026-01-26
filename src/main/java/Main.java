@@ -11,7 +11,7 @@ public class Main {
 
     public static void main(String[] args) throws IOException {
         int port = 6379;
-
+        startExpiryThread();
         ServerSocket serverSocket = new ServerSocket(port);
         System.out.println("Redis-like server running on port " + port);
 
@@ -96,26 +96,34 @@ public class Main {
                         }
                     }
                     case "RPUSH" -> {
-                        if (key != null && value != null) {
-                            int size = 0;
-                            for (int i=2;i<argCount;i++){
-                                size = listStore.rpush(key, args[i]);
+                        int size = 0;
+                        for (int i = 2; i < argCount; i++) {
+                            WakeUpResult wake = listStore.rpush(key, args[i]);
+                            if (wake != null) {
+                                // Wake blocked BLPOP client
+                                sendArray(
+                                    wake.client.out,
+                                    List.of(wake.client.key, wake.value)
+                                );
                             }
-                            sendInteger(out, size);
-                        } else {
-                            sendError(out, "RPUSH requires key and value");
                         }
+                        size = listStore.llen(key);
+                        sendInteger(out, size);
                     }
                     case "LPUSH" -> {
-                        if (key != null && value != null) {
-                            int size = 0;
-                            for (int i=argCount-1;i>=2;i--){
-                                size = listStore.rpush(key, args[i]);
+                        int size = 0;
+                        for (int i = argCount-1; i >= 2; i--) {
+                            WakeUpResult wake = listStore.rpush(key, args[i]);
+                            if (wake != null) {
+                                // Wake blocked BLPOP client
+                                sendArray(
+                                    wake.client.out,
+                                    List.of(wake.client.key, wake.value)
+                                );
                             }
-                            sendInteger(out, size);
-                        } else {
-                            sendError(out, "RPUSH requires key and value");
+                            size = listStore.llen(key);
                         }
+                        sendInteger(out, size);
                     }
                     case "LRANGE" -> {
                         if (argCount == 4) {
@@ -134,6 +142,61 @@ public class Main {
                     }
                     case "LLEN" -> {
                         sendInteger(out, listStore.llen(key));
+                    }
+                    case "LPOP" -> {
+                        if (key == null) {
+                            sendError(out, "LPOP requires a key");
+                            break;
+                        }
+
+                        // LPOP key
+                        if (argCount == 2) {
+                            String first_value = listStore.lpop(key);
+                            if (first_value == null) {
+                                sendNullBulkString(out);
+                            } else {
+                                sendBulkString(out, first_value);
+                            }
+                            break;
+                        }
+                        if (argCount == 3) {
+                            try {
+                                int count = Integer.parseInt(args[2]);
+                                List<String> popped = listStore.lpop(key, count);
+                                sendArray(out, popped);
+                            } catch (NumberFormatException e) {
+                                sendError(out, "count must be an integer");
+                            }
+                            break;
+                        }
+
+                        sendError(out, "wrong number of arguments for LPOP");
+                    }
+                    case "BLPOP" -> {
+                        String list_value = listStore.lpop(key);
+                        System.err.println(argCount);
+                        long timeoutMs = 0;
+                        if (argCount >= 3) {
+                            timeoutMs = (long)(Double.parseDouble(args[2]) * 1000);
+                        }
+
+                        // If value exists → return immediately
+                        if (list_value != null) {
+                            sendArray(out, List.of(key, list_value));
+                            continue;
+                        }
+
+                        // Otherwise block client
+                        if (timeoutMs == 0){
+                            listStore.blockClient(key, out, Long.MAX_VALUE);
+                        } else {
+                            listStore.blockClient(key, out, timeoutMs);
+                        }
+
+                        // VERY IMPORTANT
+                        // Do NOT send response
+                        // Do NOT close socket
+                        continue;
                     }
                     default -> sendError(out, "unknown command");
                 }
@@ -169,13 +232,29 @@ public class Main {
         out.flush();
     }
     private static void sendArray(OutputStream out, List<String> items) throws IOException {
-    out.write(("*" + items.size() + "\r\n").getBytes(StandardCharsets.UTF_8));
+        out.write(("*" + items.size() + "\r\n").getBytes(StandardCharsets.UTF_8));
 
-    for (String item : items) {
-        out.write(("$" + item.length() + "\r\n" + item + "\r\n")
-                .getBytes(StandardCharsets.UTF_8));
+        for (String item : items) {
+            out.write(("$" + item.length() + "\r\n" + item + "\r\n")
+                    .getBytes(StandardCharsets.UTF_8));
+        }
+        out.flush();
     }
-    out.flush();
-}
+    private static void startExpiryThread() {
+        new Thread(() -> {
+            while (true) {
+                List<BlockedClient> expired =
+                    listStore.collectExpiredBlockedClients();
+
+                for (BlockedClient client : expired) {
+                    try {
+                        sendNullBulkString(client.out);
+                    } catch (IOException ignored) {}
+                }
+
+                try { Thread.sleep(10); } catch (Exception ignored) {}
+            }
+        }).start();
+    }
 
 }

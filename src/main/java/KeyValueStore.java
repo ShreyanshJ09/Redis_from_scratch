@@ -1,7 +1,12 @@
+import java.io.OutputStream;
+import java.util.Map;
+import java.util.Queue;
 import java.util.concurrent.ConcurrentHashMap;
 
 public class KeyValueStore {
     private final ConcurrentHashMap<String, ValueWithExpiry> store;
+    Map<String, Queue<BlockedClient>> blockedClients = new ConcurrentHashMap<>();
+
 
     public KeyValueStore() {
         store = new ConcurrentHashMap<>();
