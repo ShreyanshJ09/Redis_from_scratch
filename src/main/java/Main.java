@@ -112,8 +112,8 @@ public class Main {
                     }
                     case "LPUSH" -> {
                         int size = 0;
-                        for (int i = argCount-1; i >= 2; i--) {
-                            WakeUpResult wake = listStore.rpush(key, args[i]);
+                        for (int i = 2; i < argCount; i++) {
+                            WakeUpResult wake = listStore.lpush(key, args[i]);
                             if (wake != null) {
                                 // Wake blocked BLPOP client
                                 sendArray(
@@ -121,8 +121,8 @@ public class Main {
                                     List.of(wake.client.key, wake.value)
                                 );
                             }
-                            size = listStore.llen(key);
                         }
+                        size = listStore.llen(key);
                         sendInteger(out, size);
                     }
                     case "LRANGE" -> {

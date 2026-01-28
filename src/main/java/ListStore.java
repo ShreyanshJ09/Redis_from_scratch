@@ -1,21 +1,19 @@
 import java.util.ArrayDeque;
 import java.util.ArrayList;
 import java.util.Deque;
-import java.util.LinkedList;
 import java.util.List;
 import java.util.Map;
 import java.util.Queue;
 import java.util.concurrent.ConcurrentHashMap;
-import java.util.concurrent.CopyOnWriteArrayList;
 import java.io.OutputStream;
 
 public class ListStore {
 
     private final ConcurrentHashMap<String, List<String>> lists = new ConcurrentHashMap<>();
-    Map<String, Queue<BlockedClient>> blockedClients = new ConcurrentHashMap<>();
+    private final Map<String, Queue<BlockedClient>> blockedClients = new ConcurrentHashMap<>();
 
     // RPUSH key value
-    public WakeUpResult rpush(String key, String value) {
+    public synchronized WakeUpResult rpush(String key, String value) {
         Queue<BlockedClient> queue = blockedClients.get(key);
         long now = System.currentTimeMillis();
 
@@ -36,23 +34,28 @@ public class ListStore {
         return null;
     }
 
+    public synchronized WakeUpResult lpush(String key, String value) {
+        Queue<BlockedClient> queue = blockedClients.get(key);
+        long now = System.currentTimeMillis();
 
-    public int lpush(String key, String[] values, int startIndex) {
-        List<String> list = lists.computeIfAbsent(
-            key,
-            k -> new CopyOnWriteArrayList<>()
-        );
-
-        // Insert in reverse order
-        for (int i = startIndex; i < values.length; i++) {
-            list.add(0, values[i]);
+        // If someone is waiting → wake them
+        if (queue != null) {
+            while (!queue.isEmpty()) {
+                BlockedClient client = queue.poll();
+                if (client.expireAt <= now) {
+                    continue;
+                }
+                return new WakeUpResult(client, value);
+            }
         }
 
-        return list.size();
+        // Otherwise push normally (at the LEFT/front)
+        List<String> list = lists.computeIfAbsent(key, k -> new ArrayList<>());
+        list.add(0, value);
+        return null;
     }
 
-
-    public List<String> lrange(String key, int start, int stop) {
+    public synchronized List<String> lrange(String key, int start, int stop) {
         List<String> list = lists.get(key);
 
         if (list == null) {
@@ -85,12 +88,12 @@ public class ListStore {
         return result;
     }
 
-    public int llen(String key) {
+    public synchronized int llen(String key) {
         List<String> list = lists.get(key);
         return list == null ? 0 : list.size();
     }
 
-    public String lpop(String key) {
+    public synchronized String lpop(String key) {
         List<String> list = lists.get(key);
 
         if (list == null || list.isEmpty()) {
@@ -105,7 +108,8 @@ public class ListStore {
 
         return value;
     }
-    public List<String> lpop(String key, int count) {
+
+    public synchronized List<String> lpop(String key, int count) {
         List<String> result = new ArrayList<>();
         List<String> list = lists.get(key);
 
@@ -116,7 +120,7 @@ public class ListStore {
         int actualCount = Math.min(count, list.size());
 
         for (int i = 0; i < actualCount; i++) {
-            result.add(list.removeFirst());
+            result.add(list.remove(0));
         }
 
         if (list.isEmpty()) {
@@ -126,7 +130,7 @@ public class ListStore {
         return result;
     }
 
-    public boolean exists(String key) {
+    public synchronized boolean exists(String key) {
         return lists.containsKey(key);
     }
 
