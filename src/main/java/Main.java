@@ -2,12 +2,15 @@ import java.io.*;
 import java.net.ServerSocket;
 import java.net.Socket;
 import java.nio.charset.StandardCharsets;
+import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Map;
 
 public class Main {
 
     private static final KeyValueStore keyValueStore = new KeyValueStore();
     private static final ListStore listStore = new ListStore();
+    private static final StreamStore streamStore = new StreamStore();
 
     public static void main(String[] args) throws IOException {
         int port = 6379;
@@ -197,6 +200,48 @@ public class Main {
                         // Do NOT send response
                         // Do NOT close socket
                         continue;
+                    }
+                    case "XADD" -> {
+                        // XADD stream_key entry_id field1 value1 [field2 value2 ...]
+                        if (argCount < 4 || argCount % 2 == 0) {
+                            System.err.println(argCount);
+                            sendError(out, "wrong number of arguments for XADD");
+                            continue;
+                        }
+
+                        String streamKey = args[1];
+                        String entryId = args[2];
+                        
+                        // Parse field-value pairs
+                        Map<String, String> fields = new LinkedHashMap<>();
+                        for (int i = 3; i < argCount; i += 2) {
+                            String fieldName = args[i];
+                            String fieldValue = args[i + 1];
+                            fields.put(fieldName, fieldValue);
+                        }
+
+                        // Add to stream
+                        String addedId = streamStore.xadd(streamKey, entryId, fields);
+                        
+                        // Return the entry ID as a bulk string
+                        sendBulkString(out, addedId);
+                    }
+                    case "TYPE" -> {
+                        if (key == null) {
+                            sendError(out, "TYPE requires a key");
+                            continue;
+                        }
+
+                        // Check stream store first
+                        if (streamStore.exists(key)) {
+                            sendSimpleString(out, "stream");
+                        }
+                        // Check string store
+                        else if (keyValueStore.exists(key)) {
+                            sendSimpleString(out, "string");
+                        } else {
+                            sendSimpleString(out, "none");
+                        }
                     }
                     default -> sendError(out, "unknown command");
                 }
