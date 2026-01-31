@@ -196,9 +196,6 @@ public class Main {
                             listStore.blockClient(key, out, timeoutMs);
                         }
 
-                        // VERY IMPORTANT
-                        // Do NOT send response
-                        // Do NOT close socket
                         continue;
                     }
                     case "XADD" -> {
@@ -219,12 +216,13 @@ public class Main {
                             String fieldValue = args[i + 1];
                             fields.put(fieldName, fieldValue);
                         }
-
-                        // Add to stream
-                        String addedId = streamStore.xadd(streamKey, entryId, fields);
-                        
-                        // Return the entry ID as a bulk string
-                        sendBulkString(out, addedId);
+                        try {
+                            String addedId = streamStore.xadd(streamKey, entryId, fields);
+                            sendBulkString(out, addedId);
+                        } catch (IllegalArgumentException e) {
+                            System.out.println("XADD validation error: " + e.getMessage());
+                            sendError(out, e.getMessage());
+                        }
                     }
                     case "TYPE" -> {
                         if (key == null) {
