@@ -255,19 +255,32 @@ public class Main {
                         sendStreamEntries(out, entries);
                     }
                     case "XREAD" -> {
-                        if (!args[1].equalsIgnoreCase("STREAMS")) {
-                            sendError(out, "XREAD requires STREAMS");
-                            return;
-                        }
-                        int argsAfterStreams = argCount - 2;
-                        int numStreams = argsAfterStreams / 2;
+                        long blockMs = 0;
+                        int argsStartIdx = 2;
                         
+                        if (argCount >= 4 && args[1].equalsIgnoreCase("BLOCK")) {
+                            blockMs = Long.parseLong(args[2]);
+                            argsStartIdx = 4;
+                        }
+                        
+                        if (!args[argsStartIdx - 1].equalsIgnoreCase("STREAMS")) {
+                            sendError(out, "XREAD requires STREAMS keyword");
+                            continue;
+                        }
+                        
+                        int argsAfterStreams = argCount - argsStartIdx;
+                        if (argsAfterStreams % 2 != 0) {
+                            sendError(out, "Unbalanced XREAD STREAMS list");
+                            continue;
+                        }
+                        
+                        int numStreams = argsAfterStreams / 2;
                         String[] keys = new String[numStreams];
                         String[] ids = new String[numStreams];
                         
                         for (int i = 0; i < numStreams; i++) {
-                            keys[i] = args[2 + i];
-                            ids[i] = args[2 + numStreams + i];
+                            keys[i] = args[argsStartIdx + i];
+                            ids[i] = args[argsStartIdx + numStreams + i];
                         }
                         
                         List<StreamResult> results = new ArrayList<>();
@@ -276,7 +289,78 @@ public class Main {
                             results.add(new StreamResult(keys[i], entries));
                         }
                         
-                        sendXReadMultipleResponse(out, results);
+                        boolean hasData = false;
+                        for (StreamResult r : results) {
+                            if (!r.entries.isEmpty()) {
+                                hasData = true;
+                                break;
+                            }
+                        }
+                        
+                        if (hasData) {
+                            sendXReadMultipleResponse(out, results);
+                        } else if (blockMs > 0) {
+                            long deadline = System.currentTimeMillis() + blockMs;
+                            
+                            while (System.currentTimeMillis() < deadline) {
+                                try {
+                                    Thread.sleep(10);
+                                } catch (InterruptedException e) {
+                                    break;
+                                }
+                                
+                                results.clear();
+                                for (int i = 0; i < numStreams; i++) {
+                                    List<StreamEntry> entries = streamStore.xread(keys[i], ids[i]);
+                                    results.add(new StreamResult(keys[i], entries));
+                                }
+                                
+                                hasData = false;
+                                for (StreamResult r : results) {
+                                    if (!r.entries.isEmpty()) {
+                                        hasData = true;
+                                        break;
+                                    }
+                                }
+                                
+                                if (hasData) {
+                                    sendXReadMultipleResponse(out, results);
+                                    continue; 
+                                }
+                            }
+                            
+                            sendNullBulkString(out);
+                        }
+                        else if(blockMs == 0){
+                            while (true) {
+                                try {
+                                    Thread.sleep(10);
+                                } catch (InterruptedException e) {
+                                    break;
+                                }
+                                
+                                results.clear();
+                                for (int i = 0; i < numStreams; i++) {
+                                    List<StreamEntry> entries = streamStore.xread(keys[i], ids[i]);
+                                    results.add(new StreamResult(keys[i], entries));
+                                }
+                                
+                                hasData = false;
+                                for (StreamResult r : results) {
+                                    if (!r.entries.isEmpty()) {
+                                        hasData = true;
+                                        break;
+                                    }
+                                }
+                                
+                                if (hasData) {
+                                    sendXReadMultipleResponse(out, results);
+                                    continue; 
+                                }
+                            }
+                        } else {
+                            sendXReadMultipleResponse(out, results);
+                        }
                     }
                     default -> sendError(out, "unknown command");
                 }
