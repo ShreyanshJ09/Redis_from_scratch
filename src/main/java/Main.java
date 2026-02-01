@@ -2,6 +2,7 @@ import java.io.*;
 import java.net.ServerSocket;
 import java.net.Socket;
 import java.nio.charset.StandardCharsets;
+import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
@@ -241,6 +242,42 @@ public class Main {
                             sendSimpleString(out, "none");
                         }
                     }
+                    case "XRANGE" -> {
+                        if (argCount < 4) {
+                            sendError(out, "wrong number of arguments for XRANGE");
+                            continue;
+                        }
+                        String streamKey = args[1];
+                        String startId = args[2];
+                        String endId = args[3];
+                        
+                        List<StreamEntry> entries = streamStore.xrange(streamKey, startId, endId);
+                        sendStreamEntries(out, entries);
+                    }
+                    case "XREAD" -> {
+                        if (!args[1].equalsIgnoreCase("STREAMS")) {
+                            sendError(out, "XREAD requires STREAMS");
+                            return;
+                        }
+                        int argsAfterStreams = argCount - 2;
+                        int numStreams = argsAfterStreams / 2;
+                        
+                        String[] keys = new String[numStreams];
+                        String[] ids = new String[numStreams];
+                        
+                        for (int i = 0; i < numStreams; i++) {
+                            keys[i] = args[2 + i];
+                            ids[i] = args[2 + numStreams + i];
+                        }
+                        
+                        List<StreamResult> results = new ArrayList<>();
+                        for (int i = 0; i < numStreams; i++) {
+                            List<StreamEntry> entries = streamStore.xread(keys[i], ids[i]);
+                            results.add(new StreamResult(keys[i], entries));
+                        }
+                        
+                        sendXReadMultipleResponse(out, results);
+                    }
                     default -> sendError(out, "unknown command");
                 }
             }
@@ -269,6 +306,51 @@ public class Main {
         out.write(("-ERR " + msg + "\r\n").getBytes(StandardCharsets.UTF_8));
         out.flush();
     }
+
+    private static void sendStreamEntries(OutputStream out, List<StreamEntry> entries)throws IOException  {
+        out.write(("*" + entries.size() + "\r\n").getBytes(StandardCharsets.UTF_8));
+        for (StreamEntry entry : entries) {
+            out.write("*2\r\n".getBytes(StandardCharsets.UTF_8));
+            
+            String id = entry.getId();
+            out.write(("$" + id.length() + "\r\n" + id + "\r\n").getBytes(StandardCharsets.UTF_8));
+            
+            Map<String, String> fields = entry.getFields();
+            int fieldCount = fields.size() * 2;
+            out.write(("*" + fieldCount + "\r\n").getBytes(StandardCharsets.UTF_8));
+            
+            for (Map.Entry<String, String> field : fields.entrySet()) {
+                String fieldName = field.getKey();
+                String fieldValue = field.getValue();
+                out.write(("$" + fieldName.length() + "\r\n" + fieldName + "\r\n")
+                        .getBytes(StandardCharsets.UTF_8));
+                out.write(("$" + fieldValue.length() + "\r\n" + fieldValue + "\r\n")
+                        .getBytes(StandardCharsets.UTF_8));
+            }
+        }
+        out.flush();
+    }
+
+    private static void sendXReadMultipleResponse(OutputStream out, List<StreamResult> results)throws IOException {
+        // Send array of streams
+        out.write(("*" + results.size() + "\r\n").getBytes());
+        
+        for (StreamResult result : results) {
+            // Each stream: [key, [entries]]
+            out.write("*2\r\n".getBytes());
+            
+            // Stream key
+            out.write(("$" + result.key.length() + "\r\n" + result.key + "\r\n").getBytes());
+            
+            // Entries (same format as before)
+            out.write(("*" + result.entries.size() + "\r\n").getBytes());
+
+            sendStreamEntries(out, result.entries);
+        }
+        out.flush();
+    }
+
+    
 
     private static void sendInteger(OutputStream out, int value) throws IOException {
         out.write((":" + value + "\r\n").getBytes(StandardCharsets.UTF_8));
