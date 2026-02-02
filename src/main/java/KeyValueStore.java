@@ -1,23 +1,18 @@
-import java.io.OutputStream;
-import java.util.Map;
-import java.util.Queue;
 import java.util.concurrent.ConcurrentHashMap;
 
 public class KeyValueStore {
     private final ConcurrentHashMap<String, ValueWithExpiry> store;
-    Map<String, Queue<BlockedClient>> blockedClients = new ConcurrentHashMap<>();
 
 
     public KeyValueStore() {
         store = new ConcurrentHashMap<>();
     }
 
-    // Set key with expiry (PX in ms or EX in seconds * 1000)
     public void set(String key, String value, long expiryMillis) {
         long now = System.currentTimeMillis();
         long expiryTime;
         if (expiryMillis > Long.MAX_VALUE - now) {
-            expiryTime = Long.MAX_VALUE; // prevent overflow
+            expiryTime = Long.MAX_VALUE;
         } else {
             expiryTime = now + expiryMillis;
         }
@@ -28,10 +23,44 @@ public class KeyValueStore {
         ValueWithExpiry v = store.get(key);
         if (v == null) return null;
         if (v.isExpired()) {
-            store.remove(key); // remove expired key immediately
+            store.remove(key);
             return null;
         }
         return v.getValue();
+    }
+
+    public synchronized long increment(String key) {
+        ValueWithExpiry v = store.get(key);
+        
+        if (v == null) {
+            store.put(key, new ValueWithExpiry("1", Long.MAX_VALUE));
+            return 1;
+        }
+        
+        if (v.isExpired()) {
+            store.remove(key);
+            store.put(key, new ValueWithExpiry("1", Long.MAX_VALUE));
+            return 1;
+        }
+        
+        String currentValue = v.getValue();
+        long currentExpiry = v.getExpiryTime();
+        
+        try {
+            long numValue = Long.parseLong(currentValue);
+            
+            if (numValue == Long.MAX_VALUE) {
+                throw new IllegalArgumentException("value is not an integer or out of range");
+            }
+            
+            long newValue = numValue + 1;
+            
+            store.put(key, new ValueWithExpiry(Long.toString(newValue), currentExpiry));
+            
+            return newValue;
+        } catch (NumberFormatException e) {
+            throw new IllegalArgumentException("value is not an integer or out of range");
+        }
     }
 
     public boolean exists(String key) {

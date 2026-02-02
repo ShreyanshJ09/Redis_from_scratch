@@ -6,12 +6,16 @@ import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.lang.ThreadLocal;
+
 
 public class Main {
 
     private static final KeyValueStore keyValueStore = new KeyValueStore();
     private static final ListStore listStore = new ListStore();
     private static final StreamStore streamStore = new StreamStore();
+    private static final ThreadLocal<TransactionState> transactionState =
+    ThreadLocal.withInitial(TransactionState::new);
 
     public static void main(String[] args) throws IOException {
         int port = 6379;
@@ -35,6 +39,8 @@ public class Main {
             BufferedReader reader = new BufferedReader(
                     new InputStreamReader(in, StandardCharsets.UTF_8)
             );
+            
+            TransactionState txState = transactionState.get();
 
             while (true) {
                 String line = reader.readLine();
@@ -46,19 +52,151 @@ public class Main {
                 }
 
                 int argCount = Integer.parseInt(line.substring(1));
-
-                String command = null;
-                String key = null;
-                String value = null;
                 String[] args = new String[argCount];
                 for (int i = 0; i < argCount; i++) {
                     reader.readLine(); // $length
                     args[i] = reader.readLine();
                 }
-                command = args[0].toUpperCase();
-                if (argCount >= 2) key = args[1];
-                if (argCount >= 3) value = args[2];
-                switch (command) {
+                String command = args[0].toUpperCase();
+                if (command.equals("MULTI")) {
+                    txState.startTransaction();
+                    sendSimpleString(out, "OK");
+                    continue;
+                }
+
+                if (command.equals("EXEC")) {
+                    if (!txState.isInTransaction()) {
+                        sendError(out, "EXEC without MULTI");
+                        continue;
+                    }
+
+                    executeTransaction(out, txState);
+                    txState.endTransaction();
+                    System.out.println("EXEC: transaction completed");
+                    continue;
+                }
+                if (txState.isInTransaction()) {
+                    txState.queueCommand(command, args);
+                    sendSimpleString(out, "QUEUED");
+                    System.out.println("Queued: " + command);
+                    continue;
+                }
+
+                executeCommand(command, args, out);
+            }
+        }   catch (IOException e) {
+        System.out.println("Client disconnected");
+    } finally {
+        // CRITICAL: Clean up thread-local to prevent memory leaks
+        transactionState.remove();
+        System.out.println("Transaction state cleaned up");
+    }
+    }
+    
+    private static void sendSimpleString(OutputStream out, String msg) throws IOException {
+        out.write(("+" + msg + "\r\n").getBytes(StandardCharsets.UTF_8));
+        out.flush();
+    }
+    
+    private static void sendBulkString(OutputStream out, String msg) throws IOException {
+        out.write(("$" + msg.length() + "\r\n" + msg + "\r\n")
+                .getBytes(StandardCharsets.UTF_8));
+        out.flush();
+    }
+    
+    private static void sendNullBulkString(OutputStream out) throws IOException {
+        out.write("$-1\r\n".getBytes(StandardCharsets.UTF_8));
+        out.flush();
+    }
+    
+    private static void sendError(OutputStream out, String msg) throws IOException {
+        out.write(("-ERR " + msg + "\r\n").getBytes(StandardCharsets.UTF_8));
+        out.flush();
+    }
+    
+    private static void sendStreamEntries(OutputStream out, List<StreamEntry> entries)throws IOException  {
+        out.write(("*" + entries.size() + "\r\n").getBytes(StandardCharsets.UTF_8));
+        for (StreamEntry entry : entries) {
+            out.write("*2\r\n".getBytes(StandardCharsets.UTF_8));
+            
+            String id = entry.getId();
+            out.write(("$" + id.length() + "\r\n" + id + "\r\n").getBytes(StandardCharsets.UTF_8));
+            
+            Map<String, String> fields = entry.getFields();
+            int fieldCount = fields.size() * 2;
+            out.write(("*" + fieldCount + "\r\n").getBytes(StandardCharsets.UTF_8));
+            
+            for (Map.Entry<String, String> field : fields.entrySet()) {
+                String fieldName = field.getKey();
+                String fieldValue = field.getValue();
+                out.write(("$" + fieldName.length() + "\r\n" + fieldName + "\r\n")
+                        .getBytes(StandardCharsets.UTF_8));
+                out.write(("$" + fieldValue.length() + "\r\n" + fieldValue + "\r\n")
+                        .getBytes(StandardCharsets.UTF_8));
+            }
+        }
+        out.flush();
+    }
+    
+    private static void sendXReadMultipleResponse(OutputStream out, List<StreamResult> results)throws IOException {
+        // Send array of streams
+        out.write(("*" + results.size() + "\r\n").getBytes());
+        
+        for (StreamResult result : results) {
+            // Each stream: [key, [entries]]
+            out.write("*2\r\n".getBytes());
+            
+            // Stream key
+            out.write(("$" + result.key.length() + "\r\n" + result.key + "\r\n").getBytes());
+            
+            // Entries (same format as before)
+            out.write(("*" + result.entries.size() + "\r\n").getBytes());
+
+            sendStreamEntries(out, result.entries);
+        }
+        out.flush();
+    }
+
+    private static void executeTransaction(OutputStream out, TransactionState txState) throws IOException {
+        List<QueuedCommand> commands = txState.getCommandQueue();
+        
+        if (commands.isEmpty()) {
+            out.write("*0\r\n".getBytes(StandardCharsets.UTF_8));
+            out.flush();
+            System.out.println("EXEC: empty transaction");
+            return;
+        }
+        
+        List<ByteArrayOutputStream> responses = new ArrayList<>();
+        
+        for (QueuedCommand cmd : commands) {
+            ByteArrayOutputStream responseBuffer = new ByteArrayOutputStream();
+            
+            try {
+                executeCommand(cmd.command, cmd.args, responseBuffer);
+                responses.add(responseBuffer);
+            } catch (Exception e) {
+                ByteArrayOutputStream errorBuffer = new ByteArrayOutputStream();
+                String errorMsg = e.getMessage() != null ? e.getMessage() : "command failed";
+                errorBuffer.write(("-ERR " + errorMsg + "\r\n").getBytes(StandardCharsets.UTF_8));
+                responses.add(errorBuffer);
+            }
+        }
+        
+        out.write(("*" + responses.size() + "\r\n").getBytes(StandardCharsets.UTF_8));
+        for (ByteArrayOutputStream response : responses) {
+            out.write(response.toByteArray());
+        }
+        out.flush();
+        
+        System.out.println("EXEC: executed " + commands.size() + " commands");
+    }
+    private static void executeCommand(String command, String[] args, OutputStream out) throws IOException {
+        String key = args.length >= 2 ? args[1] : null;
+        String value = args.length >= 3 ? args[2] : null;
+        int argCount = args.length;
+        
+        switch (command) {
                     case "PING" -> sendSimpleString(out, "PONG");
                     case "ECHO" -> {
                         if (key != null) sendBulkString(out, key);
@@ -66,18 +204,15 @@ public class Main {
                     }
                     case "SET" -> {
                         if (key != null && value != null) {
-                            long expiryMillis = Long.MAX_VALUE; // default: no expiry
-
-                            // Check for optional arguments
+                            long expiryMillis = Long.MAX_VALUE;
                             if (argCount >= 5) {
                                 String optionName = args[3].toUpperCase();
-
                                 try {
-                                    int timeValue = Integer.parseInt(args[4]); // actual time
+                                    int timeValue = Integer.parseInt(args[4]);
                                     if ("EX".equals(optionName)) {
-                                        expiryMillis = timeValue * 1000; // seconds to ms
+                                        expiryMillis = timeValue * 1000;
                                     } else if ("PX".equals(optionName)) {
-                                        expiryMillis = timeValue; // already in ms
+                                        expiryMillis = timeValue;
                                     }
                                 } catch (NumberFormatException ignored) {}
                             }
@@ -97,6 +232,21 @@ public class Main {
                             }
                         } else {
                             sendError(out, "GET requires a key");
+                        }
+                    }
+                    case "INCR" -> {
+                        if (key == null) {
+                            sendError(out, "INCR requires a key");
+                            return;
+                        }
+                        
+                        try {
+                            long newValue = keyValueStore.increment(key);
+                            sendInteger(out, (int) newValue);
+                            System.out.println("INCR: " + key + " -> " + newValue);
+                        } catch (IllegalArgumentException e) {
+                            sendError(out, e.getMessage());
+                            System.out.println("INCR error: " + key + " - " + e.getMessage());
                         }
                     }
                     case "RPUSH" -> {
@@ -150,10 +300,8 @@ public class Main {
                     case "LPOP" -> {
                         if (key == null) {
                             sendError(out, "LPOP requires a key");
-                            break;
+                            return;
                         }
-
-                        // LPOP key
                         if (argCount == 2) {
                             String first_value = listStore.lpop(key);
                             if (first_value == null) {
@@ -161,7 +309,7 @@ public class Main {
                             } else {
                                 sendBulkString(out, first_value);
                             }
-                            break;
+                            return;
                         }
                         if (argCount == 3) {
                             try {
@@ -171,9 +319,8 @@ public class Main {
                             } catch (NumberFormatException e) {
                                 sendError(out, "count must be an integer");
                             }
-                            break;
+                            return;
                         }
-
                         sendError(out, "wrong number of arguments for LPOP");
                     }
                     case "BLPOP" -> {
@@ -184,33 +331,28 @@ public class Main {
                             timeoutMs = (long)(Double.parseDouble(args[2]) * 1000);
                         }
 
-                        // If value exists → return immediately
                         if (list_value != null) {
                             sendArray(out, List.of(key, list_value));
-                            continue;
+                            return;
                         }
-
-                        // Otherwise block client
                         if (timeoutMs == 0){
                             listStore.blockClient(key, out, Long.MAX_VALUE);
                         } else {
                             listStore.blockClient(key, out, timeoutMs);
                         }
 
-                        continue;
+                        return;
                     }
                     case "XADD" -> {
-                        // XADD stream_key entry_id field1 value1 [field2 value2 ...]
                         if (argCount < 4 || argCount % 2 == 0) {
                             System.err.println(argCount);
                             sendError(out, "wrong number of arguments for XADD");
-                            continue;
+                            return;
                         }
 
                         String streamKey = args[1];
                         String entryId = args[2];
                         
-                        // Parse field-value pairs
                         Map<String, String> fields = new LinkedHashMap<>();
                         for (int i = 3; i < argCount; i += 2) {
                             String fieldName = args[i];
@@ -228,14 +370,11 @@ public class Main {
                     case "TYPE" -> {
                         if (key == null) {
                             sendError(out, "TYPE requires a key");
-                            continue;
+                            return;
                         }
-
-                        // Check stream store first
                         if (streamStore.exists(key)) {
                             sendSimpleString(out, "stream");
                         }
-                        // Check string store
                         else if (keyValueStore.exists(key)) {
                             sendSimpleString(out, "string");
                         } else {
@@ -245,7 +384,7 @@ public class Main {
                     case "XRANGE" -> {
                         if (argCount < 4) {
                             sendError(out, "wrong number of arguments for XRANGE");
-                            continue;
+                            return;
                         }
                         String streamKey = args[1];
                         String startId = args[2];
@@ -265,13 +404,13 @@ public class Main {
                         
                         if (!args[argsStartIdx - 1].equalsIgnoreCase("STREAMS")) {
                             sendError(out, "XREAD requires STREAMS keyword");
-                            continue;
+                            return;
                         }
                         
                         int argsAfterStreams = argCount - argsStartIdx;
                         if (argsAfterStreams % 2 != 0) {
                             sendError(out, "Unbalanced XREAD STREAMS list");
-                            continue;
+                            return;
                         }
                         
                         int numStreams = argsAfterStreams / 2;
@@ -322,10 +461,9 @@ public class Main {
                                         break;
                                     }
                                 }
-                                
                                 if (hasData) {
                                     sendXReadMultipleResponse(out, results);
-                                    continue; 
+                                    continue;
                                 }
                             }
                             
@@ -355,7 +493,7 @@ public class Main {
                                 
                                 if (hasData) {
                                     sendXReadMultipleResponse(out, results);
-                                    continue; 
+                                    continue;
                                 }
                             }
                         } else {
@@ -364,85 +502,15 @@ public class Main {
                     }
                     default -> sendError(out, "unknown command");
                 }
-            }
-        } catch (IOException e) {
-            System.out.println("Client disconnected");
-        }
-    }
-
-    private static void sendSimpleString(OutputStream out, String msg) throws IOException {
-        out.write(("+" + msg + "\r\n").getBytes(StandardCharsets.UTF_8));
-        out.flush();
-    }
-
-    private static void sendBulkString(OutputStream out, String msg) throws IOException {
-        out.write(("$" + msg.length() + "\r\n" + msg + "\r\n")
-                .getBytes(StandardCharsets.UTF_8));
-        out.flush();
-    }
-
-    private static void sendNullBulkString(OutputStream out) throws IOException {
-        out.write("$-1\r\n".getBytes(StandardCharsets.UTF_8));
-        out.flush();
-    }
-
-    private static void sendError(OutputStream out, String msg) throws IOException {
-        out.write(("-ERR " + msg + "\r\n").getBytes(StandardCharsets.UTF_8));
-        out.flush();
-    }
-
-    private static void sendStreamEntries(OutputStream out, List<StreamEntry> entries)throws IOException  {
-        out.write(("*" + entries.size() + "\r\n").getBytes(StandardCharsets.UTF_8));
-        for (StreamEntry entry : entries) {
-            out.write("*2\r\n".getBytes(StandardCharsets.UTF_8));
             
-            String id = entry.getId();
-            out.write(("$" + id.length() + "\r\n" + id + "\r\n").getBytes(StandardCharsets.UTF_8));
-            
-            Map<String, String> fields = entry.getFields();
-            int fieldCount = fields.size() * 2;
-            out.write(("*" + fieldCount + "\r\n").getBytes(StandardCharsets.UTF_8));
-            
-            for (Map.Entry<String, String> field : fields.entrySet()) {
-                String fieldName = field.getKey();
-                String fieldValue = field.getValue();
-                out.write(("$" + fieldName.length() + "\r\n" + fieldName + "\r\n")
-                        .getBytes(StandardCharsets.UTF_8));
-                out.write(("$" + fieldValue.length() + "\r\n" + fieldValue + "\r\n")
-                        .getBytes(StandardCharsets.UTF_8));
-            }
-        }
-        out.flush();
     }
-
-    private static void sendXReadMultipleResponse(OutputStream out, List<StreamResult> results)throws IOException {
-        // Send array of streams
-        out.write(("*" + results.size() + "\r\n").getBytes());
-        
-        for (StreamResult result : results) {
-            // Each stream: [key, [entries]]
-            out.write("*2\r\n".getBytes());
-            
-            // Stream key
-            out.write(("$" + result.key.length() + "\r\n" + result.key + "\r\n").getBytes());
-            
-            // Entries (same format as before)
-            out.write(("*" + result.entries.size() + "\r\n").getBytes());
-
-            sendStreamEntries(out, result.entries);
-        }
-        out.flush();
-    }
-
-    
-
     private static void sendInteger(OutputStream out, int value) throws IOException {
         out.write((":" + value + "\r\n").getBytes(StandardCharsets.UTF_8));
         out.flush();
     }
     private static void sendArray(OutputStream out, List<String> items) throws IOException {
         out.write(("*" + items.size() + "\r\n").getBytes(StandardCharsets.UTF_8));
-
+        
         for (String item : items) {
             out.write(("$" + item.length() + "\r\n" + item + "\r\n")
                     .getBytes(StandardCharsets.UTF_8));
@@ -460,10 +528,46 @@ public class Main {
                         sendNullBulkString(client.out);
                     } catch (IOException ignored) {}
                 }
-
                 try { Thread.sleep(10); } catch (Exception ignored) {}
             }
         }).start();
     }
 
+}
+
+class TransactionState {
+    private boolean inTransaction = false;
+    private List<QueuedCommand> commandQueue = new ArrayList<>();
+    
+    public boolean isInTransaction() {
+        return inTransaction;
+    }
+    
+    public void startTransaction() {
+        inTransaction = true;
+        commandQueue.clear();
+    }
+    
+    public void queueCommand(String command, String[] args) {
+        commandQueue.add(new QueuedCommand(command, args));
+    }
+    
+    public List<QueuedCommand> getCommandQueue() {
+        return new ArrayList<>(commandQueue);  // Return copy
+    }
+    
+    public void endTransaction() {
+        inTransaction = false;
+        commandQueue.clear();
+    }
+}
+
+class QueuedCommand {
+    final String command;
+    final String[] args;
+    
+    QueuedCommand(String command, String[] args) {
+        this.command = command;
+        this.args = args.clone();  // Defensive copy
+    }
 }
