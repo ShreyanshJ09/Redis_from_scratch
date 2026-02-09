@@ -16,17 +16,49 @@ public class Main {
     private static final StreamStore streamStore = new StreamStore();
     private static final ThreadLocal<TransactionState> transactionState =
     ThreadLocal.withInitial(TransactionState::new);
-
+    
+    private static String serverRole = "master";
+    private static String masterHost = null;
+    private static int masterPort = 0;
     public static void main(String[] args) throws IOException {
         int port = 6379;
+        
+        for (int i = 0; i < args.length; i++) {
+            if (args[i].equals("--port") && i + 1 < args.length) {
+                try {
+                    port = Integer.parseInt(args[i + 1]);
+                } catch (NumberFormatException e) {
+                    System.err.println("Invalid port: " + args[i + 1]);
+                }
+            } 
+            else if (args[i].equals("--replicaof") && i + 1 < args.length) {
+                String replicaofValue = args[i + 1];
+                String[] parts = replicaofValue.split(" ");
+                
+                if (parts.length == 2) {
+                    masterHost = parts[0];
+                    try {
+                        masterPort = Integer.parseInt(parts[1]);
+                        serverRole = "slave";
+                        System.out.println("Replica of " + masterHost + ":" + masterPort);
+                    } catch (NumberFormatException e) {
+                        System.err.println("Invalid master port: " + parts[1]);
+                    }
+                } else {
+                    System.err.println("Invalid --replicaof format");
+                }
+            }
+        }
+        
+        System.out.println("Server role: " + serverRole);
+        
         startExpiryThread();
         ServerSocket serverSocket = new ServerSocket(port);
         System.out.println("Redis-like server running on port " + port);
-
+        
         while (true) {
             Socket client = serverSocket.accept();
             System.out.println("Client connected");
-
             new Thread(() -> handleClient(client)).start();
         }
     }
@@ -198,6 +230,20 @@ public class Main {
         
         switch (command) {
                     case "PING" -> sendSimpleString(out, "PONG");
+                    case "INFO" -> {
+                        String section = args.length >= 2 ? args[1].toLowerCase() : "all";
+                        
+                        if (section.equals("replication") || section.equals("all")) {
+                            StringBuilder info = new StringBuilder();
+                            info.append("# Replication\r\n");
+                            info.append("role:").append(serverRole).append("\r\n");
+                            info.append("master_host:").append(masterHost).append("\r\n");
+                            info.append("master_port:").append(masterPort).append("\r\n");
+                            sendBulkString(out, info.toString());
+                        } else {
+                            sendBulkString(out, "");
+                        }
+                    }
                     case "ECHO" -> {
                         if (key != null) sendBulkString(out, key);
                         else sendError(out, "ECHO requires an argument");
