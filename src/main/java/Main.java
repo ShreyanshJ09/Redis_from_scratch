@@ -20,6 +20,9 @@ public class Main {
     private static String serverRole = "master";
     private static String masterHost = null;
     private static int masterPort = 0;
+    private static int replicaListeningPort = 6379;
+    private static final String MASTER_REPLID = "8371b4fb1155b71f4a04d3e1bc3e18c4a990aeeb";
+    private static final int MASTER_REPL_OFFSET = 0;
     public static void main(String[] args) throws IOException {
         int port = 6379;
         
@@ -27,6 +30,7 @@ public class Main {
             if (args[i].equals("--port") && i + 1 < args.length) {
                 try {
                     port = Integer.parseInt(args[i + 1]);
+                    replicaListeningPort = port;
                 } catch (NumberFormatException e) {
                     System.err.println("Invalid port: " + args[i + 1]);
                 }
@@ -55,6 +59,11 @@ public class Main {
         startExpiryThread();
         ServerSocket serverSocket = new ServerSocket(port);
         System.out.println("Redis-like server running on port " + port);
+        
+        // If this is a replica, initiate handshake with master
+        if (serverRole.equals("slave")) {
+            initiateReplicaHandshake();
+        }
         
         while (true) {
             Socket client = serverSocket.accept();
@@ -237,8 +246,8 @@ public class Main {
                             StringBuilder info = new StringBuilder();
                             info.append("# Replication\r\n");
                             info.append("role:").append(serverRole).append("\r\n");
-                            info.append("master_host:").append(masterHost).append("\r\n");
-                            info.append("master_port:").append(masterPort).append("\r\n");
+                            info.append("master_replid:").append(MASTER_REPLID).append("\r\n");
+                            info.append("master_repl_offset:").append(MASTER_REPL_OFFSET).append("\r\n");
                             sendBulkString(out, info.toString());
                         } else {
                             sendBulkString(out, "");
@@ -577,6 +586,77 @@ public class Main {
                 try { Thread.sleep(10); } catch (Exception ignored) {}
             }
         }).start();
+    }
+
+    private static void initiateReplicaHandshake() {
+        new Thread(() -> {
+            try {
+                System.out.println("Connecting to master at " + masterHost + ":" + masterPort);
+                Socket masterSocket = new Socket(masterHost, masterPort);
+                OutputStream masterOut = masterSocket.getOutputStream();
+                InputStream masterIn = masterSocket.getInputStream();
+                BufferedReader masterReader = new BufferedReader(
+                    new InputStreamReader(masterIn, StandardCharsets.UTF_8)
+                );
+                
+                // Step 1: Send PING command as RESP array: *1\r\n$4\r\nPING\r\n
+                String pingCommand = "*1\r\n$4\r\nPING\r\n";
+                masterOut.write(pingCommand.getBytes(StandardCharsets.UTF_8));
+                masterOut.flush();
+                System.out.println("Sent PING to master");
+                
+                // Read PING response (expecting +PONG\r\n)
+                String pingResponse = masterReader.readLine();
+                System.out.println("Received PING response: " + pingResponse);
+                
+                // Step 2: Send REPLCONF listening-port <PORT>
+                String port = String.valueOf(masterPort); // Using the port this replica is listening on
+                // We need to get the actual port this server is listening on
+                // For now, we'll need to pass it to this method
+                String replconfPort = buildReplconfListeningPort();
+                masterOut.write(replconfPort.getBytes(StandardCharsets.UTF_8));
+                masterOut.flush();
+                System.out.println("Sent REPLCONF listening-port");
+                
+                // Read REPLCONF response (expecting +OK\r\n)
+                String replconfResponse1 = masterReader.readLine();
+                System.out.println("Received REPLCONF response: " + replconfResponse1);
+                
+                // Step 3: Send REPLCONF capa psync2
+                String replconfCapa = "*3\r\n$8\r\nREPLCONF\r\n$4\r\ncapa\r\n$6\r\npsync2\r\n";
+                masterOut.write(replconfCapa.getBytes(StandardCharsets.UTF_8));
+                masterOut.flush();
+                System.out.println("Sent REPLCONF capa psync2");
+                
+                // Read REPLCONF response (expecting +OK\r\n)
+                String replconfResponse2 = masterReader.readLine();
+                System.out.println("Received REPLCONF response: " + replconfResponse2);
+                
+                // Step 4: Send PSYNC ? -1
+                String psyncCommand = "*3\r\n$5\r\nPSYNC\r\n$1\r\n?\r\n$2\r\n-1\r\n";
+                masterOut.write(psyncCommand.getBytes(StandardCharsets.UTF_8));
+                masterOut.flush();
+                System.out.println("Sent PSYNC ? -1");
+                
+                // Read PSYNC response (expecting +FULLRESYNC <REPL_ID> 0\r\n)
+                String psyncResponse = masterReader.readLine();
+                System.out.println("Received PSYNC response: " + psyncResponse);
+                
+            } catch (IOException e) {
+                System.err.println("Failed to connect to master: " + e.getMessage());
+            }
+        }).start();
+    }
+    
+    private static String buildReplconfListeningPort() {
+        // We need to get the port this replica is listening on
+        // For simplicity, we'll store it as a static variable
+        String portStr = String.valueOf(replicaListeningPort);
+        int portLen = portStr.length();
+        
+        // *3\r\n$8\r\nREPLCONF\r\n$14\r\nlistening-port\r\n$<len>\r\n<port>\r\n
+        return "*3\r\n$8\r\nREPLCONF\r\n$14\r\nlistening-port\r\n$" + 
+            portLen + "\r\n" + portStr + "\r\n";
     }
 
 }
