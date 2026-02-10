@@ -555,6 +555,13 @@ public class Main {
                             sendXReadMultipleResponse(out, results);
                         }
                     }
+                    case "REPLCONF" -> {
+                        sendSimpleString(out, "OK");
+                    }
+                    case "PSYNC" -> {
+                        String response = "FULLRESYNC " + MASTER_REPLID + " 0";
+                        sendSimpleString(out, response);
+                    }
                     default -> sendError(out, "unknown command");
                 }
             
