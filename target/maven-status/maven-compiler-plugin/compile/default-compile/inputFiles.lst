@@ -1,7 +1,14 @@
+/Users/shreyanshjangitwar/Redis/src/main/java/BaseCommandHandler.java
+/Users/shreyanshjangitwar/Redis/src/main/java/CommandHandler.java
+/Users/shreyanshjangitwar/Redis/src/main/java/CommandRegistry.java
 /Users/shreyanshjangitwar/Redis/src/main/java/ConcurrencyTest.java
+/Users/shreyanshjangitwar/Redis/src/main/java/EchoCommandHandler.java
+/Users/shreyanshjangitwar/Redis/src/main/java/GetCommandHandler.java
 /Users/shreyanshjangitwar/Redis/src/main/java/KeyValueStore.java
 /Users/shreyanshjangitwar/Redis/src/main/java/ListStore.java
 /Users/shreyanshjangitwar/Redis/src/main/java/Main.java
+/Users/shreyanshjangitwar/Redis/src/main/java/PingCommandHandler.java
 /Users/shreyanshjangitwar/Redis/src/main/java/RaceConditionTest.java
+/Users/shreyanshjangitwar/Redis/src/main/java/SetCommandHandler.java
 /Users/shreyanshjangitwar/Redis/src/main/java/StreamStore.java
 /Users/shreyanshjangitwar/Redis/src/main/java/ValueWithExpiry.java
