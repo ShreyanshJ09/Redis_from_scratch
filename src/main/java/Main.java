@@ -285,17 +285,15 @@ public class Main {
                 Socket masterSocket = new Socket(masterHost, masterPort);
                 OutputStream masterOut = masterSocket.getOutputStream();
                 InputStream masterIn = masterSocket.getInputStream();
-                BufferedReader masterReader = new BufferedReader(
-                    new InputStreamReader(masterIn, StandardCharsets.UTF_8)
-                );
                 
+                // Use raw InputStream for handshake to avoid buffering issues
                 // Step 1: Send PING command
                 String pingCommand = "*1\r\n$4\r\nPING\r\n";
                 masterOut.write(pingCommand.getBytes(StandardCharsets.UTF_8));
                 masterOut.flush();
                 System.out.println("Sent PING to master");
                 
-                String pingResponse = masterReader.readLine();
+                String pingResponse = readLine(masterIn);
                 System.out.println("Received PING response: " + pingResponse);
                 
                 // Step 2: Send REPLCONF listening-port
@@ -304,7 +302,7 @@ public class Main {
                 masterOut.flush();
                 System.out.println("Sent REPLCONF listening-port");
                 
-                String replconfResponse1 = masterReader.readLine();
+                String replconfResponse1 = readLine(masterIn);
                 System.out.println("Received REPLCONF response: " + replconfResponse1);
                 
                 // Step 3: Send REPLCONF capa psync2
@@ -313,7 +311,7 @@ public class Main {
                 masterOut.flush();
                 System.out.println("Sent REPLCONF capa psync2");
                 
-                String replconfResponse2 = masterReader.readLine();
+                String replconfResponse2 = readLine(masterIn);
                 System.out.println("Received REPLCONF response: " + replconfResponse2);
                 
                 // Step 4: Send PSYNC ? -1
@@ -322,19 +320,106 @@ public class Main {
                 masterOut.flush();
                 System.out.println("Sent PSYNC ? -1");
                 
-                String psyncResponse = masterReader.readLine();
+                String psyncResponse = readLine(masterIn);
                 System.out.println("Received PSYNC response: " + psyncResponse);
+                
+                // Step 5: Receive RDB file
+                String rdbHeader = readLine(masterIn);
+                System.out.println("Received RDB header: " + rdbHeader);
+                
+                if (rdbHeader.startsWith("$")) {
+                    int rdbLength = Integer.parseInt(rdbHeader.substring(1));
+                    System.out.println("RDB file length: " + rdbLength + " bytes");
+                    
+                    // Read the RDB file contents (binary data) directly from InputStream
+                    byte[] rdbData = new byte[rdbLength];
+                    int totalRead = 0;
+                    while (totalRead < rdbLength) {
+                        int bytesRead = masterIn.read(rdbData, totalRead, rdbLength - totalRead);
+                        if (bytesRead == -1) {
+                            throw new IOException("Unexpected end of stream while reading RDB file");
+                        }
+                        totalRead += bytesRead;
+                    }
+                    System.out.println("Received RDB file: " + totalRead + " bytes");
+                }
+                
+                // Step 6: Now create BufferedReader for command processing
+                System.out.println("Replica ready to receive commands from master");
+                BufferedReader masterReader = new BufferedReader(
+                    new InputStreamReader(masterIn, StandardCharsets.UTF_8)
+                );
+                processCommandsFromMaster(masterReader, masterOut);
                 
             } catch (IOException e) {
                 System.err.println("Failed to connect to master: " + e.getMessage());
+                e.printStackTrace();
             }
         }).start();
+    }
+    
+    /**
+     * Read a line from InputStream (without BufferedReader to avoid buffering issues)
+     */
+    private static String readLine(InputStream in) throws IOException {
+        StringBuilder line = new StringBuilder();
+        int b;
+        while ((b = in.read()) != -1) {
+            if (b == '\r') {
+                int next = in.read();
+                if (next == '\n') {
+                    break;
+                }
+            }
+            line.append((char) b);
+        }
+        return line.toString();
+    }
+    
+    /**
+     * Continuously read and process commands from the master
+     */
+    private static void processCommandsFromMaster(BufferedReader reader, OutputStream out) throws IOException {
+        while (true) {
+            String line = reader.readLine();
+            if (line == null) {
+                System.out.println("Master connection closed");
+                break;
+            }
+            
+            if (!line.startsWith("*")) {
+                System.err.println("Invalid RESP from master: " + line);
+                continue;
+            }
+            
+            int argCount = Integer.parseInt(line.substring(1));
+            String[] args = new String[argCount];
+            
+            for (int i = 0; i < argCount; i++) {
+                String lengthLine = reader.readLine(); // $length
+                args[i] = reader.readLine();
+            }
+            
+            String command = args[0].toUpperCase();
+            System.out.println("Replica received command from master: " + command + " (args: " + argCount + ")");
+            
+            // Process the command silently (no response to master)
+            try {
+                // Use a NullOutputStream to discard responses
+                OutputStream nullOut = new ByteArrayOutputStream();
+                commandRegistry.executeCommand(command, args, nullOut);
+                System.out.println("Replica executed: " + command);
+            } catch (Exception e) {
+                System.err.println("Error executing command on replica: " + e.getMessage());
+            }
+        }
     }
     
     private static String buildReplconfListeningPort() {
         String portStr = String.valueOf(replicaListeningPort);
         int portLen = portStr.length();
         
-        return "*3\r\n$8\r\nREPLCONF\r\n$14\r\nlistening-port\r\n$" +  portLen + "\r\n" + portStr + "\r\n";
+        return "*3\r\n$8\r\nREPLCONF\r\n$14\r\nlistening-port\r\n$" + 
+               portLen + "\r\n" + portStr + "\r\n";
     }
 }

@@ -129,6 +129,43 @@ public class ListStore {
         return result;
     }
 
+    public synchronized String rpop(String key) {
+        List<String> list = lists.get(key);
+
+        if (list == null || list.isEmpty()) {
+            return null;
+        }
+
+        String value = list.remove(list.size() - 1);
+
+        if (list.isEmpty()) {
+            lists.remove(key);
+        }
+
+        return value;
+    }
+
+    public synchronized List<String> rpop(String key, int count) {
+        List<String> result = new ArrayList<>();
+        List<String> list = lists.get(key);
+
+        if (list == null || list.isEmpty() || count <= 0) {
+            return result;
+        }
+
+        int actualCount = Math.min(count, list.size());
+
+        for (int i = 0; i < actualCount; i++) {
+            result.add(list.remove(list.size() - 1));
+        }
+
+        if (list.isEmpty()) {
+            lists.remove(key);
+        }
+
+        return result;
+    }
+
     public synchronized boolean exists(String key) {
         return lists.containsKey(key);
     }
