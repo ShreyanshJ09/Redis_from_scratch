@@ -137,7 +137,7 @@ public class Main {
         // Transaction commands will be handled specially in handleClient
         
         // Register replication commands (READ - these are control commands)
-        commandRegistry.register(new ReplconfCommandHandler());
+        commandRegistry.register(new ReplconfCommandHandler(connectedReplicas, serverRole));
         commandRegistry.register(new PsyncCommandHandler(MASTER_REPLID, EMPTY_RDB_FILE, connectedReplicas));
     }
 
@@ -241,12 +241,15 @@ public class Main {
         
         // Send to all connected replicas
         synchronized (connectedReplicas) {
+            System.out.println("Propagating command to " + connectedReplicas.size() + " replica(s): " + args[0]);
+            
             List<OutputStream> failedReplicas = new ArrayList<>();
             
             for (OutputStream replica : connectedReplicas) {
                 try {
                     replica.write(commandBytes);
                     replica.flush();
+                    System.out.println("Successfully propagated to replica");
                 } catch (IOException e) {
                     System.err.println("Failed to propagate to replica: " + e.getMessage());
                     failedReplicas.add(replica);
@@ -380,12 +383,20 @@ public class Main {
      * Continuously read and process commands from the master
      */
     private static void processCommandsFromMaster(BufferedReader reader, OutputStream out) throws IOException {
+        long replicationOffset = 0;  // Track bytes processed
+        
         while (true) {
+            // Mark the position to calculate command bytes
+            ByteArrayOutputStream commandBuffer = new ByteArrayOutputStream();
+            
             String line = reader.readLine();
             if (line == null) {
                 System.out.println("Master connection closed");
                 break;
             }
+            
+            // Write to buffer for byte counting
+            commandBuffer.write((line + "\r\n").getBytes(StandardCharsets.UTF_8));
             
             if (!line.startsWith("*")) {
                 System.err.println("Invalid RESP from master: " + line);
@@ -397,21 +408,47 @@ public class Main {
             
             for (int i = 0; i < argCount; i++) {
                 String lengthLine = reader.readLine(); // $length
+                commandBuffer.write((lengthLine + "\r\n").getBytes(StandardCharsets.UTF_8));
+                
                 args[i] = reader.readLine();
+                commandBuffer.write((args[i] + "\r\n").getBytes(StandardCharsets.UTF_8));
             }
             
             String command = args[0].toUpperCase();
-            System.out.println("Replica received command from master: " + command + " (args: " + argCount + ")");
+            byte[] commandBytes = commandBuffer.toByteArray();
+            int commandByteLength = commandBytes.length;
             
-            // Process the command silently (no response to master)
-            try {
-                // Use a NullOutputStream to discard responses
-                OutputStream nullOut = new ByteArrayOutputStream();
-                commandRegistry.executeCommand(command, args, nullOut);
-                System.out.println("Replica executed: " + command);
-            } catch (Exception e) {
-                System.err.println("Error executing command on replica: " + e.getMessage());
+            System.out.println("Replica received command from master: " + command + 
+                             " (args: " + argCount + ", bytes: " + commandByteLength + ")");
+            
+            // Check if this is REPLCONF GETACK
+            if (command.equals("REPLCONF") && args.length >= 2 && args[1].equalsIgnoreCase("GETACK")) {
+                // Respond with current offset (BEFORE processing this command)
+                String offsetStr = String.valueOf(replicationOffset);
+                String response = "*3\r\n$8\r\nREPLCONF\r\n$3\r\nACK\r\n$" + 
+                                 offsetStr.length() + "\r\n" + offsetStr + "\r\n";
+                out.write(response.getBytes(StandardCharsets.UTF_8));
+                out.flush();
+                System.out.println("Sent REPLCONF ACK " + replicationOffset);
+                
+                // Now add this GETACK command's bytes to offset
+                replicationOffset += commandByteLength;
+            } else {
+                // Process other commands silently (no response to master)
+                try {
+                    // Use a NullOutputStream to discard responses
+                    OutputStream nullOut = new ByteArrayOutputStream();
+                    commandRegistry.executeCommand(command, args, nullOut);
+                    System.out.println("Replica executed: " + command);
+                } catch (Exception e) {
+                    System.err.println("Error executing command on replica: " + e.getMessage());
+                }
+                
+                // Add command bytes to offset
+                replicationOffset += commandByteLength;
             }
+            
+            System.out.println("Current replication offset: " + replicationOffset);
         }
     }
     
