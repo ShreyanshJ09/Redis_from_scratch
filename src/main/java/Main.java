@@ -15,6 +15,9 @@ public class Main {
     // Store connected replicas for command propagation
     private static final List<OutputStream> connectedReplicas = new ArrayList<>();
     
+    // Track replication state for WAIT command
+    private static final ReplicationTracker replicationTracker = new ReplicationTracker();
+    
     // Command registry
     private static CommandRegistry commandRegistry;
     
@@ -38,8 +41,7 @@ public class Main {
         int len = s.length();
         byte[] data = new byte[len / 2];
         for (int i = 0; i < len; i += 2) {
-            data[i / 2] = (byte) ((Character.digit(s.charAt(i), 16) << 4)
-                                 + Character.digit(s.charAt(i+1), 16));
+            data[i / 2] = (byte) ((Character.digit(s.charAt(i), 16) << 4)+ Character.digit(s.charAt(i+1), 16));
         }
         return data;
     }
@@ -139,6 +141,9 @@ public class Main {
         // Register replication commands (READ - these are control commands)
         commandRegistry.register(new ReplconfCommandHandler(connectedReplicas, serverRole));
         commandRegistry.register(new PsyncCommandHandler(MASTER_REPLID, EMPTY_RDB_FILE, connectedReplicas));
+        
+        // Register WAIT command (used to check replica acknowledgments)
+        commandRegistry.register(new WaitCommandHandler(connectedReplicas, replicationTracker));
     }
 
     private static void handleClient(Socket client) {
@@ -259,6 +264,10 @@ public class Main {
             // Remove failed replicas
             connectedReplicas.removeAll(failedReplicas);
         }
+        
+        // Track this write for WAIT command
+        replicationTracker.markWriteSent();
+        replicationTracker.addToOffset(commandBytes.length);
     }
     
     private static void startExpiryThread() {
@@ -418,18 +427,15 @@ public class Main {
             byte[] commandBytes = commandBuffer.toByteArray();
             int commandByteLength = commandBytes.length;
             
-            System.out.println("Replica received command from master: " + command + 
-                             " (args: " + argCount + ", bytes: " + commandByteLength + ")");
+            System.out.println("Replica received command from master: " + command + " (args: " + argCount + ", bytes: " + commandByteLength + ")");
             
             // Check if this is REPLCONF GETACK
             if (command.equals("REPLCONF") && args.length >= 2 && args[1].equalsIgnoreCase("GETACK")) {
                 // Respond with current offset (BEFORE processing this command)
                 String offsetStr = String.valueOf(replicationOffset);
-                String response = "*3\r\n$8\r\nREPLCONF\r\n$3\r\nACK\r\n$" + 
-                                 offsetStr.length() + "\r\n" + offsetStr + "\r\n";
+                String response = "*3\r\n$8\r\nREPLCONF\r\n$3\r\nACK\r\n$" + offsetStr.length() + "\r\n" + offsetStr + "\r\n";
                 out.write(response.getBytes(StandardCharsets.UTF_8));
                 out.flush();
-                System.out.println("Sent REPLCONF ACK " + replicationOffset);
                 
                 // Now add this GETACK command's bytes to offset
                 replicationOffset += commandByteLength;
@@ -456,7 +462,6 @@ public class Main {
         String portStr = String.valueOf(replicaListeningPort);
         int portLen = portStr.length();
         
-        return "*3\r\n$8\r\nREPLCONF\r\n$14\r\nlistening-port\r\n$" + 
-               portLen + "\r\n" + portStr + "\r\n";
+        return "*3\r\n$8\r\nREPLCONF\r\n$14\r\nlistening-port\r\n$" + portLen + "\r\n" + portStr + "\r\n";
     }
 }
