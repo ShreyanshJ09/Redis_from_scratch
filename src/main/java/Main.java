@@ -139,7 +139,7 @@ public class Main {
         // Transaction commands will be handled specially in handleClient
         
         // Register replication commands (READ - these are control commands)
-        commandRegistry.register(new ReplconfCommandHandler(connectedReplicas, serverRole));
+        commandRegistry.register(new ReplconfCommandHandler(connectedReplicas, serverRole, replicationTracker));
         commandRegistry.register(new PsyncCommandHandler(MASTER_REPLID, EMPTY_RDB_FILE, connectedReplicas));
         
         // Register WAIT command (used to check replica acknowledgments)

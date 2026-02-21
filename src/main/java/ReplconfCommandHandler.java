@@ -5,10 +5,13 @@ import java.util.List;
 public class ReplconfCommandHandler extends BaseCommandHandler {
     private final List<OutputStream> connectedReplicas;
     private final String serverRole;
+    private final ReplicationTracker replicationTracker;
     
-    public ReplconfCommandHandler(List<OutputStream> connectedReplicas, String serverRole) {
+    public ReplconfCommandHandler(List<OutputStream> connectedReplicas, String serverRole,
+                                  ReplicationTracker replicationTracker) {
         this.connectedReplicas = connectedReplicas;
         this.serverRole = serverRole;
+        this.replicationTracker = replicationTracker;
     }
     
     @Override
@@ -76,6 +79,7 @@ public class ReplconfCommandHandler extends BaseCommandHandler {
             long offset = Long.parseLong(offsetStr);
             System.out.println("Master received ACK from replica: offset=" + offset);
             
+            replicationTracker.recordReplicaOffset(out, offset);
         } catch (NumberFormatException e) {
             System.err.println("Invalid offset in REPLCONF ACK: " + offsetStr);
         }
