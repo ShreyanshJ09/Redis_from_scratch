@@ -21,6 +21,8 @@
 /Users/shreyanshjangitwar/Redis/src/main/java/PingCommandHandler.java
 /Users/shreyanshjangitwar/Redis/src/main/java/PsyncCommandHandler.java
 /Users/shreyanshjangitwar/Redis/src/main/java/PubSubContext.java
+/Users/shreyanshjangitwar/Redis/src/main/java/PubSubManager.java
+/Users/shreyanshjangitwar/Redis/src/main/java/PublishCommandHandler.java
 /Users/shreyanshjangitwar/Redis/src/main/java/RDBConfig.java
 /Users/shreyanshjangitwar/Redis/src/main/java/RDBParser.java
 /Users/shreyanshjangitwar/Redis/src/main/java/ReplconfCommandHandler.java

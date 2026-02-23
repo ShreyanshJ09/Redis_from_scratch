@@ -18,6 +18,9 @@ public class Main {
     // Track replication state for WAIT command
     private static final ReplicationTracker replicationTracker = new ReplicationTracker();
     
+    // Global pub/sub manager (tracks all channel subscriptions)
+    private static final PubSubManager pubSubManager = new PubSubManager();
+    
     // Command registry
     private static CommandRegistry commandRegistry;
     
@@ -25,9 +28,8 @@ public class Main {
     private static final ThreadLocal<TransactionContext> transactionContext =
         ThreadLocal.withInitial(TransactionContext::new);
     
-    // Thread-local pub/sub context for each client
-    private static final ThreadLocal<PubSubContext> pubSubContext =
-        ThreadLocal.withInitial(PubSubContext::new);
+    // Note: PubSubContext is created per-client in handleClient() 
+    // because it needs the client's OutputStream
     
     private static String serverRole = "master";
     private static String masterHost = null;
@@ -98,7 +100,7 @@ public class Main {
         // Initialize command registry
         initializeCommandRegistry();
         
-        // RDBParser.loadRDB(rdbConfig.getFullPath(), keyValueStore);
+        RDBParser.loadRDB(rdbConfig.getFullPath(), keyValueStore);
         
         // Start expiry thread for blocked clients
         startExpiryThread();
@@ -168,6 +170,9 @@ public class Main {
         commandRegistry.register(new ConfigGetCommandHandler(rdbConfig));
         commandRegistry.register(new KeysCommandHandler(keyValueStore, listStore, streamStore));
         
+        // Register pub/sub commands
+        commandRegistry.register(new PublishCommandHandler(pubSubManager));
+        
         // Note: SUBSCRIBE and PING are handled specially in handleClient due to pub/sub context
     }
 
@@ -181,7 +186,9 @@ public class Main {
             );
             
             TransactionContext txContext = transactionContext.get();
-            PubSubContext psContext = pubSubContext.get();
+            
+            // Create PubSubContext with OutputStream for this client
+            PubSubContext psContext = new PubSubContext(pubSubManager, out);
 
             while (true) {
                 String line = reader.readLine();
@@ -210,7 +217,7 @@ public class Main {
                 // Check if in subscribed mode and command is not allowed
                 if (psContext.isSubscribed() && !isAllowedInSubscribedMode(command)) {
                     sendError(out, "Can't execute '" + command.toLowerCase() + 
-                             "': only (P|S)SUBSCRIBE / (P|S)UNSUBSCRIBE / PING / QUIT / RESET are allowed in this context");
+                        "': only (P|S)SUBSCRIBE / (P|S)UNSUBSCRIBE / PING / QUIT / RESET are allowed in this context");
                     continue;
                 }
                 
@@ -273,7 +280,10 @@ public class Main {
         } finally {
             // Clean up thread-locals to prevent memory leaks
             transactionContext.remove();
-            pubSubContext.remove();
+            
+            // Clean up pub/sub subscriptions when client disconnects
+            // Note: We can't access 'out' here, but PubSubManager will handle cleanup
+            // when the OutputStream is closed
         }
     }
     
