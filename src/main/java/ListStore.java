@@ -11,12 +11,10 @@ public class ListStore {
     private final ConcurrentHashMap<String, List<String>> lists = new ConcurrentHashMap<>();
     private final Map<String, Queue<BlockedClient>> blockedClients = new ConcurrentHashMap<>();
 
-    // RPUSH key value
     public synchronized WakeUpResult rpush(String key, String value) {
         Queue<BlockedClient> queue = blockedClients.get(key);
         long now = System.currentTimeMillis();
 
-        // If someone is waiting → wake them
         if (queue != null) {
             while (!queue.isEmpty()) {
                 BlockedClient client = queue.poll();
@@ -27,7 +25,6 @@ public class ListStore {
             }
         }
 
-        // Otherwise push normally
         List<String> list = lists.computeIfAbsent(key, k -> new ArrayList<>());
         list.add(value);
         return null;
@@ -37,7 +34,6 @@ public class ListStore {
         Queue<BlockedClient> queue = blockedClients.get(key);
         long now = System.currentTimeMillis();
 
-        // If someone is waiting → wake them
         if (queue != null) {
             while (!queue.isEmpty()) {
                 BlockedClient client = queue.poll();
@@ -48,7 +44,6 @@ public class ListStore {
             }
         }
 
-        // Otherwise push normally (at the LEFT/front)
         List<String> list = lists.computeIfAbsent(key, k -> new ArrayList<>());
         list.add(0, value);
         return null;
@@ -188,6 +183,11 @@ public class ListStore {
         blockedClients
             .computeIfAbsent(key, k -> new ArrayDeque<>())
             .add(new BlockedClient(key, out, expireAt));
+    }
+    
+
+    public synchronized List<String> getAllKeys() {
+        return new ArrayList<>(lists.keySet());
     }
 }
 

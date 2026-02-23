@@ -136,6 +136,10 @@ public class StreamStore {
             }
         }
     }
+    
+    public synchronized List<String> getAllKeys() {
+        return new ArrayList<>(streams.keySet());
+    }
 }
 
 

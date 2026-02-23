@@ -25,12 +25,18 @@ public class Main {
     private static final ThreadLocal<TransactionContext> transactionContext =
         ThreadLocal.withInitial(TransactionContext::new);
     
+    // Thread-local pub/sub context for each client
+    private static final ThreadLocal<PubSubContext> pubSubContext =
+        ThreadLocal.withInitial(PubSubContext::new);
+    
     private static String serverRole = "master";
     private static String masterHost = null;
     private static int masterPort = 0;
     private static int replicaListeningPort = 6379;
     private static final String MASTER_REPLID = "8371b4fb1155b71f4a04d3e1bc3e18c4a990aeeb";
     private static final int MASTER_REPL_OFFSET = 0;
+    
+    private static final RDBConfig rdbConfig = new RDBConfig();
     
     // Empty RDB file
     private static final byte[] EMPTY_RDB_FILE = hexStringToByteArray(
@@ -41,7 +47,8 @@ public class Main {
         int len = s.length();
         byte[] data = new byte[len / 2];
         for (int i = 0; i < len; i += 2) {
-            data[i / 2] = (byte) ((Character.digit(s.charAt(i), 16) << 4)+ Character.digit(s.charAt(i+1), 16));
+            data[i / 2] = (byte) ((Character.digit(s.charAt(i), 16) << 4)
+                                 + Character.digit(s.charAt(i+1), 16));
         }
         return data;
     }
@@ -76,12 +83,22 @@ public class Main {
                     System.err.println("Invalid --replicaof format");
                 }
             }
+            else if (args[i].equals("--dir") && i + 1 < args.length) {
+                rdbConfig.setDir(args[i + 1]);
+                System.out.println("RDB directory: " + rdbConfig.getDir());
+            }
+            else if (args[i].equals("--dbfilename") && i + 1 < args.length) {
+                rdbConfig.setDbfilename(args[i + 1]);
+                System.out.println("RDB filename: " + rdbConfig.getDbfilename());
+            }
         }
         
         System.out.println("Server role: " + serverRole);
         
         // Initialize command registry
         initializeCommandRegistry();
+        
+        // RDBParser.loadRDB(rdbConfig.getFullPath(), keyValueStore);
         
         // Start expiry thread for blocked clients
         startExpiryThread();
@@ -110,7 +127,9 @@ public class Main {
         commandRegistry = new CommandRegistry();
         
         // Register server/utility commands (READ)
-        commandRegistry.register(new PingCommandHandler());
+        // Note: PING is intercepted in handleClient when pub/sub context exists,
+        // but we still register it for the normal flow
+        commandRegistry.register(new PingCommandHandler(null)); // null = normal mode
         commandRegistry.register(new EchoCommandHandler());
         commandRegistry.register(new InfoCommandHandler(serverRole, MASTER_REPLID, MASTER_REPL_OFFSET));
         
@@ -144,6 +163,12 @@ public class Main {
         
         // Register WAIT command (used to check replica acknowledgments)
         commandRegistry.register(new WaitCommandHandler(connectedReplicas, replicationTracker));
+        
+        // Register RDB-related commands
+        commandRegistry.register(new ConfigGetCommandHandler(rdbConfig));
+        commandRegistry.register(new KeysCommandHandler(keyValueStore, listStore, streamStore));
+        
+        // Note: SUBSCRIBE and PING are handled specially in handleClient due to pub/sub context
     }
 
     private static void handleClient(Socket client) {
@@ -156,6 +181,7 @@ public class Main {
             );
             
             TransactionContext txContext = transactionContext.get();
+            PubSubContext psContext = pubSubContext.get();
 
             while (true) {
                 String line = reader.readLine();
@@ -167,6 +193,12 @@ public class Main {
                 }
 
                 int argCount = Integer.parseInt(line.substring(1));
+                
+                // Handle empty commands (just pressing Enter)
+                if (argCount == 0) {
+                    continue;  // Ignore empty commands
+                }
+                
                 String[] args = new String[argCount];
                 for (int i = 0; i < argCount; i++) {
                     reader.readLine(); // $length
@@ -174,6 +206,28 @@ public class Main {
                 }
                 
                 String command = args[0].toUpperCase();
+                
+                // Check if in subscribed mode and command is not allowed
+                if (psContext.isSubscribed() && !isAllowedInSubscribedMode(command)) {
+                    sendError(out, "Can't execute '" + command.toLowerCase() + 
+                             "': only (P|S)SUBSCRIBE / (P|S)UNSUBSCRIBE / PING / QUIT / RESET are allowed in this context");
+                    continue;
+                }
+                
+                // Handle SUBSCRIBE command (needs pub/sub context)
+                if (command.equals("SUBSCRIBE")) {
+                    SubscribeCommandHandler subscribeHandler = new SubscribeCommandHandler(psContext);
+                    subscribeHandler.execute(args, out);
+                    continue;
+                }
+                
+                // Handle PING command ONLY if in subscribed mode (behavior changes)
+                // Otherwise, let it go through the normal command registry flow
+                if (command.equals("PING") && psContext.isSubscribed()) {
+                    PingCommandHandler pingHandler = new PingCommandHandler(psContext);
+                    pingHandler.execute(args, out);
+                    continue;
+                }
                 
                 // Handle transaction commands specially
                 if (command.equals("MULTI")) {
@@ -217,9 +271,23 @@ public class Main {
         } catch (IOException e) {
             System.out.println("Client disconnected");
         } finally {
-            // Clean up thread-local to prevent memory leaks
+            // Clean up thread-locals to prevent memory leaks
             transactionContext.remove();
+            pubSubContext.remove();
         }
+    }
+    
+    /**
+     * Check if a command is allowed in subscribed mode.
+     */
+    private static boolean isAllowedInSubscribedMode(String command) {
+        return command.equals("SUBSCRIBE") ||
+               command.equals("UNSUBSCRIBE") ||
+               command.equals("PSUBSCRIBE") ||
+               command.equals("PUNSUBSCRIBE") ||
+               command.equals("PING") ||
+               command.equals("QUIT") ||
+               command.equals("RESET");
     }
     
     private static void sendSimpleString(OutputStream out, String msg) throws IOException {
@@ -427,13 +495,15 @@ public class Main {
             byte[] commandBytes = commandBuffer.toByteArray();
             int commandByteLength = commandBytes.length;
             
-            System.out.println("Replica received command from master: " + command + " (args: " + argCount + ", bytes: " + commandByteLength + ")");
+            System.out.println("Replica received command from master: " + command + 
+                             " (args: " + argCount + ", bytes: " + commandByteLength + ")");
             
             // Check if this is REPLCONF GETACK
             if (command.equals("REPLCONF") && args.length >= 2 && args[1].equalsIgnoreCase("GETACK")) {
                 // Respond with current offset (BEFORE processing this command)
                 String offsetStr = String.valueOf(replicationOffset);
-                String response = "*3\r\n$8\r\nREPLCONF\r\n$3\r\nACK\r\n$" + offsetStr.length() + "\r\n" + offsetStr + "\r\n";
+                String response = "*3\r\n$8\r\nREPLCONF\r\n$3\r\nACK\r\n$" + 
+                                 offsetStr.length() + "\r\n" + offsetStr + "\r\n";
                 out.write(response.getBytes(StandardCharsets.UTF_8));
                 out.flush();
                 
@@ -462,6 +532,7 @@ public class Main {
         String portStr = String.valueOf(replicaListeningPort);
         int portLen = portStr.length();
         
-        return "*3\r\n$8\r\nREPLCONF\r\n$14\r\nlistening-port\r\n$" + portLen + "\r\n" + portStr + "\r\n";
+        return "*3\r\n$8\r\nREPLCONF\r\n$14\r\nlistening-port\r\n$" + 
+               portLen + "\r\n" + portStr + "\r\n";
     }
 }

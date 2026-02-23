@@ -72,4 +72,16 @@ public class KeyValueStore {
         }
         return true;
     }
+    public java.util.List<String> getAllKeys() {
+        java.util.List<String> keys = new java.util.ArrayList<>();
+        
+        for (String key : store.keySet()) {
+            ValueWithExpiry v = store.get(key);
+            if (v != null && !v.isExpired()) {
+                keys.add(key);
+            }
+        }
+        
+        return keys;
+    }
 }
