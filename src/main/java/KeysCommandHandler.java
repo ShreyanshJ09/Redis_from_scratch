@@ -7,11 +7,14 @@ public class KeysCommandHandler extends BaseCommandHandler {
     private final KeyValueStore keyValueStore;
     private final ListStore listStore;
     private final StreamStore streamStore;
+    private final SortedSetStore sortedSetStore;
     
-    public KeysCommandHandler(KeyValueStore keyValueStore, ListStore listStore, StreamStore streamStore) {
+    public KeysCommandHandler(KeyValueStore keyValueStore, ListStore listStore, 
+                             StreamStore streamStore, SortedSetStore sortedSetStore) {
         this.keyValueStore = keyValueStore;
         this.listStore = listStore;
         this.streamStore = streamStore;
+        this.sortedSetStore = sortedSetStore;
     }
     
     @Override
@@ -28,13 +31,13 @@ public class KeysCommandHandler extends BaseCommandHandler {
             return;
         }
         
+        // Collect all keys from all stores
         List<String> allKeys = new ArrayList<>();
         
         allKeys.addAll(keyValueStore.getAllKeys());
-        
         allKeys.addAll(listStore.getAllKeys());
-        
         allKeys.addAll(streamStore.getAllKeys());
+        allKeys.addAll(sortedSetStore.getAllKeys());
         
         sendArray(out, allKeys);
     }
@@ -42,5 +45,10 @@ public class KeysCommandHandler extends BaseCommandHandler {
     @Override
     public String getCommandName() {
         return "KEYS";
+    }
+    
+    @Override
+    public boolean isWriteCommand() {
+        return false; // KEYS only reads data
     }
 }

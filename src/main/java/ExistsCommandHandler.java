@@ -5,11 +5,14 @@ public class ExistsCommandHandler extends BaseCommandHandler {
     private final KeyValueStore keyValueStore;
     private final ListStore listStore;
     private final StreamStore streamStore;
+    private final SortedSetStore sortedSetStore;
     
-    public ExistsCommandHandler(KeyValueStore keyValueStore, ListStore listStore, StreamStore streamStore) {
+    public ExistsCommandHandler(KeyValueStore keyValueStore, ListStore listStore, 
+                                StreamStore streamStore, SortedSetStore sortedSetStore) {
         this.keyValueStore = keyValueStore;
         this.listStore = listStore;
         this.streamStore = streamStore;
+        this.sortedSetStore = sortedSetStore;
     }
     
     @Override
@@ -24,7 +27,8 @@ public class ExistsCommandHandler extends BaseCommandHandler {
         // Check if key exists in any store
         boolean exists = keyValueStore.exists(key) || 
                         listStore.exists(key) || 
-                        streamStore.exists(key);
+                        streamStore.exists(key) ||
+                        sortedSetStore.exists(key);
         
         sendInteger(out, exists ? 1 : 0);
     }

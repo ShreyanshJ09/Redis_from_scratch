@@ -30,7 +30,6 @@ public class PubSubContext {
     public boolean unsubscribe(String channel) {
         boolean removed = subscribedChannels.remove(channel);
         
-        // Unregister from global manager
         if (removed && pubSubManager != null) {
             pubSubManager.unsubscribe(channel, clientOut);
         }

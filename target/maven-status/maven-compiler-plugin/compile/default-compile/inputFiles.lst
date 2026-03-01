@@ -30,6 +30,7 @@
 /Users/shreyanshjangitwar/Redis/src/main/java/RpopCommandHandler.java
 /Users/shreyanshjangitwar/Redis/src/main/java/RpushCommandHandler.java
 /Users/shreyanshjangitwar/Redis/src/main/java/SetCommandHandler.java
+/Users/shreyanshjangitwar/Redis/src/main/java/SortedSetStore.java
 /Users/shreyanshjangitwar/Redis/src/main/java/StreamStore.java
 /Users/shreyanshjangitwar/Redis/src/main/java/SubscribeCommandHandler.java
 /Users/shreyanshjangitwar/Redis/src/main/java/TransactionContext.java
@@ -40,3 +41,6 @@
 /Users/shreyanshjangitwar/Redis/src/main/java/XaddCommandHandler.java
 /Users/shreyanshjangitwar/Redis/src/main/java/XrangeCommandHandler.java
 /Users/shreyanshjangitwar/Redis/src/main/java/XreadCommandHandler.java
+/Users/shreyanshjangitwar/Redis/src/main/java/ZaddCommandHandler.java
+/Users/shreyanshjangitwar/Redis/src/main/java/ZrangeCommandHandler.java
+/Users/shreyanshjangitwar/Redis/src/main/java/ZrankCommandHandler.java

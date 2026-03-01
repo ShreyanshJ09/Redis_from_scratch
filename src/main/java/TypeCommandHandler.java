@@ -5,11 +5,13 @@ public class TypeCommandHandler extends BaseCommandHandler {
     private final KeyValueStore keyValueStore;
     private final ListStore listStore;
     private final StreamStore streamStore;
+    private final SortedSetStore sortedSetStore;
     
-    public TypeCommandHandler(KeyValueStore keyValueStore, ListStore listStore, StreamStore streamStore) {
+    public TypeCommandHandler(KeyValueStore keyValueStore, ListStore listStore, StreamStore streamStore, SortedSetStore sortedSetStore) {
         this.keyValueStore = keyValueStore;
         this.listStore = listStore;
         this.streamStore = streamStore;
+        this.sortedSetStore = sortedSetStore;
     }
     
     @Override
@@ -21,8 +23,10 @@ public class TypeCommandHandler extends BaseCommandHandler {
         
         String key = args[1];
         
-        // Check which store contains the key
-        if (streamStore.exists(key)) {
+        // Check which store contains the key (order matters - most specific first)
+        if (sortedSetStore.exists(key)) {
+            sendSimpleString(out, "zset");
+        } else if (streamStore.exists(key)) {
             sendSimpleString(out, "stream");
         } else if (listStore.exists(key)) {
             sendSimpleString(out, "list");

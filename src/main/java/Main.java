@@ -11,6 +11,7 @@ public class Main {
     private static final KeyValueStore keyValueStore = new KeyValueStore();
     private static final ListStore listStore = new ListStore();
     private static final StreamStore streamStore = new StreamStore();
+    private static final SortedSetStore sortedSetStore = new SortedSetStore();
     
     // Store connected replicas for command propagation
     private static final List<OutputStream> connectedReplicas = new ArrayList<>();
@@ -49,7 +50,8 @@ public class Main {
         int len = s.length();
         byte[] data = new byte[len / 2];
         for (int i = 0; i < len; i += 2) {
-            data[i / 2] = (byte) ((Character.digit(s.charAt(i), 16) << 4)+ Character.digit(s.charAt(i+1), 16));
+            data[i / 2] = (byte) ((Character.digit(s.charAt(i), 16) << 4)
+                                 + Character.digit(s.charAt(i+1), 16));
         }
         return data;
     }
@@ -138,8 +140,8 @@ public class Main {
         commandRegistry.register(new SetCommandHandler(keyValueStore));  // WRITE
         commandRegistry.register(new GetCommandHandler(keyValueStore));  // READ
         commandRegistry.register(new IncrCommandHandler(keyValueStore)); // WRITE
-        commandRegistry.register(new ExistsCommandHandler(keyValueStore, listStore, streamStore)); // READ
-        commandRegistry.register(new TypeCommandHandler(keyValueStore, listStore, streamStore));   // READ
+        commandRegistry.register(new ExistsCommandHandler(keyValueStore, listStore, streamStore, sortedSetStore)); // READ
+        commandRegistry.register(new TypeCommandHandler(keyValueStore, listStore, streamStore, sortedSetStore));   // READ
         
         // Register list commands
         commandRegistry.register(new RpushCommandHandler(listStore));  // WRITE
@@ -154,6 +156,11 @@ public class Main {
         commandRegistry.register(new XrangeCommandHandler(streamStore)); // READ
         commandRegistry.register(new XreadCommandHandler(streamStore));  // READ
         
+        // Register sorted set commands
+        commandRegistry.register(new ZaddCommandHandler(sortedSetStore));   // WRITE
+        commandRegistry.register(new ZrankCommandHandler(sortedSetStore));  // READ
+        commandRegistry.register(new ZrangeCommandHandler(sortedSetStore)); // READ
+        
         // Register transaction commands (Special handling - see handleClient)
         // Note: We can't pass transactionContext here as it's thread-local
         // Transaction commands will be handled specially in handleClient
@@ -167,7 +174,7 @@ public class Main {
         
         // Register RDB-related commands
         commandRegistry.register(new ConfigGetCommandHandler(rdbConfig));
-        commandRegistry.register(new KeysCommandHandler(keyValueStore, listStore, streamStore));
+        commandRegistry.register(new KeysCommandHandler(keyValueStore, listStore, streamStore, sortedSetStore));
         
         // Register pub/sub commands
         commandRegistry.register(new PublishCommandHandler(pubSubManager));
@@ -176,8 +183,7 @@ public class Main {
     }
 
     private static void handleClient(Socket client) {
-        PubSubContext psContext = null;  // Declare outside try block for finally access
-        
+        PubSubContext psContext = null;
         try (
             InputStream in = client.getInputStream();
             OutputStream out = client.getOutputStream();
@@ -188,7 +194,6 @@ public class Main {
             
             TransactionContext txContext = transactionContext.get();
             
-            // Create PubSubContext with OutputStream for this client
             psContext = new PubSubContext(pubSubManager, out);
 
             while (true) {
