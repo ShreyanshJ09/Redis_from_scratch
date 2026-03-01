@@ -3,6 +3,7 @@ import java.io.OutputStream;
 import java.nio.charset.StandardCharsets;
 import java.util.Set;
 
+
 public class PublishCommandHandler extends BaseCommandHandler {
     private final PubSubManager pubSubManager;
     
@@ -27,6 +28,7 @@ public class PublishCommandHandler extends BaseCommandHandler {
         
         sendInteger(out, subscriberCount);
     }
+    
 
     private void deliverMessageToSubscribers(String channel, String message, Set<OutputStream> subscribers) {
         if (subscribers.isEmpty()) {
@@ -47,14 +49,21 @@ public class PublishCommandHandler extends BaseCommandHandler {
         
         byte[] messageBytes = messageArray.toString().getBytes(StandardCharsets.UTF_8);
         
+        java.util.List<OutputStream> deadSubscribers = new java.util.ArrayList<>();
+        
         for (OutputStream subscriber : subscribers) {
             try {
                 subscriber.write(messageBytes);
                 subscriber.flush();
                 System.out.println("Delivered message to subscriber on channel: " + channel);
             } catch (IOException e) {
-                System.err.println("Failed to deliver message to subscriber: " + e.getMessage());
+                System.err.println("Failed to deliver message to subscriber: " + e.getMessage());                deadSubscribers.add(subscriber);
             }
+        }
+        
+        for (OutputStream deadSubscriber : deadSubscribers) {
+            pubSubManager.unsubscribeAll(deadSubscriber);
+            System.out.println("Removed dead subscriber from channel: " + channel);
         }
     }
     

@@ -34,6 +34,7 @@
 /Users/shreyanshjangitwar/Redis/src/main/java/SubscribeCommandHandler.java
 /Users/shreyanshjangitwar/Redis/src/main/java/TransactionContext.java
 /Users/shreyanshjangitwar/Redis/src/main/java/TypeCommandHandler.java
+/Users/shreyanshjangitwar/Redis/src/main/java/UnsubscribeCommandHandler.java
 /Users/shreyanshjangitwar/Redis/src/main/java/ValueWithExpiry.java
 /Users/shreyanshjangitwar/Redis/src/main/java/WaitCommandHandler.java
 /Users/shreyanshjangitwar/Redis/src/main/java/XaddCommandHandler.java

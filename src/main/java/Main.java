@@ -49,8 +49,7 @@ public class Main {
         int len = s.length();
         byte[] data = new byte[len / 2];
         for (int i = 0; i < len; i += 2) {
-            data[i / 2] = (byte) ((Character.digit(s.charAt(i), 16) << 4)
-                                 + Character.digit(s.charAt(i+1), 16));
+            data[i / 2] = (byte) ((Character.digit(s.charAt(i), 16) << 4)+ Character.digit(s.charAt(i+1), 16));
         }
         return data;
     }
@@ -177,6 +176,8 @@ public class Main {
     }
 
     private static void handleClient(Socket client) {
+        PubSubContext psContext = null;  // Declare outside try block for finally access
+        
         try (
             InputStream in = client.getInputStream();
             OutputStream out = client.getOutputStream();
@@ -188,7 +189,7 @@ public class Main {
             TransactionContext txContext = transactionContext.get();
             
             // Create PubSubContext with OutputStream for this client
-            PubSubContext psContext = new PubSubContext(pubSubManager, out);
+            psContext = new PubSubContext(pubSubManager, out);
 
             while (true) {
                 String line = reader.readLine();
@@ -217,7 +218,7 @@ public class Main {
                 // Check if in subscribed mode and command is not allowed
                 if (psContext.isSubscribed() && !isAllowedInSubscribedMode(command)) {
                     sendError(out, "Can't execute '" + command.toLowerCase() + 
-                        "': only (P|S)SUBSCRIBE / (P|S)UNSUBSCRIBE / PING / QUIT / RESET are allowed in this context");
+                             "': only (P|S)SUBSCRIBE / (P|S)UNSUBSCRIBE / PING / QUIT / RESET are allowed in this context");
                     continue;
                 }
                 
@@ -225,6 +226,13 @@ public class Main {
                 if (command.equals("SUBSCRIBE")) {
                     SubscribeCommandHandler subscribeHandler = new SubscribeCommandHandler(psContext);
                     subscribeHandler.execute(args, out);
+                    continue;
+                }
+                
+                // Handle UNSUBSCRIBE command (needs pub/sub context)
+                if (command.equals("UNSUBSCRIBE")) {
+                    UnsubscribeCommandHandler unsubscribeHandler = new UnsubscribeCommandHandler(psContext);
+                    unsubscribeHandler.execute(args, out);
                     continue;
                 }
                 
@@ -281,9 +289,10 @@ public class Main {
             // Clean up thread-locals to prevent memory leaks
             transactionContext.remove();
             
-            // Clean up pub/sub subscriptions when client disconnects
-            // Note: We can't access 'out' here, but PubSubManager will handle cleanup
-            // when the OutputStream is closed
+            if (psContext != null) {
+                psContext.clearSubscriptions();
+                System.out.println("Cleaned up client subscriptions");
+            }
         }
     }
     

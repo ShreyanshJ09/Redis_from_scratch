@@ -10,11 +10,9 @@ public class PubSubManager {
     
 
     public synchronized boolean subscribe(String channel, OutputStream clientOut) {
-        channelSubscribers.computeIfAbsent(channel, k -> Collections.newSetFromMap(new ConcurrentHashMap<>()))
-                          .add(clientOut);
+        channelSubscribers.computeIfAbsent(channel, k -> Collections.newSetFromMap(new ConcurrentHashMap<>())).add(clientOut);
         
-        clientChannels.computeIfAbsent(clientOut, k -> Collections.newSetFromMap(new ConcurrentHashMap<>()))
-                      .add(channel);
+        clientChannels.computeIfAbsent(clientOut, k -> Collections.newSetFromMap(new ConcurrentHashMap<>())).add(channel);
         
         return true;
     }

@@ -17,14 +17,11 @@ public class SubscribeCommandHandler extends BaseCommandHandler {
             return;
         }
         
-        // Subscribe to each channel specified
         for (int i = 1; i < args.length; i++) {
             String channel = args[i];
             
-            // Add to subscribed channels (returns true if new, false if already subscribed)
             pubSubContext.subscribe(channel);
             
-            // Send subscription confirmation for this channel
             sendSubscribeResponse(out, channel, pubSubContext.getSubscriptionCount());
         }
     }
