@@ -31,6 +31,18 @@ public class SortedSetStore {
         return zset != null ? zset.size() : 0;
     }
     
+    public synchronized Double zscore(String key, String member) {
+        SortedSet zset = sortedSets.get(key);
+        if (zset == null) return null;
+        return zset.getScore(member);
+    }
+    
+    public synchronized int zrem(String key, String member) {
+        SortedSet zset = sortedSets.get(key);
+        if (zset == null) return 0;
+        return zset.remove(member);
+    }
+    
     public List<String> getAllKeys() {
         return new ArrayList<>(sortedSets.keySet());
     }
@@ -113,6 +125,21 @@ class SortedSet {
     
     public int size() {
         return memberToScore.size();
+    }
+    
+    public Double getScore(String member) {
+        return memberToScore.get(member);
+    }
+    
+    public int remove(String member) {
+        Double score = memberToScore.remove(member);
+        if (score == null) {
+            return 0;  // Member didn't exist
+        }
+        
+        // Remove from sorted tree
+        sortedMembers.remove(new ScoredMember(score, member));
+        return 1;  // Successfully removed
     }
 }
 

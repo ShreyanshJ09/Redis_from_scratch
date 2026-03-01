@@ -160,6 +160,9 @@ public class Main {
         commandRegistry.register(new ZaddCommandHandler(sortedSetStore));   // WRITE
         commandRegistry.register(new ZrankCommandHandler(sortedSetStore));  // READ
         commandRegistry.register(new ZrangeCommandHandler(sortedSetStore)); // READ
+        commandRegistry.register(new ZcardCommandHandler(sortedSetStore));  // READ
+        commandRegistry.register(new ZscoreCommandHandler(sortedSetStore)); // READ
+        commandRegistry.register(new ZremCommandHandler(sortedSetStore));   // WRITE
         
         // Register transaction commands (Special handling - see handleClient)
         // Note: We can't pass transactionContext here as it's thread-local
